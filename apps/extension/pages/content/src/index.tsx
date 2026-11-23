@@ -1,15 +1,17 @@
 import { createRoot } from 'react-dom/client';
 import App from './app';
+import { collectionAssignment, runAutoCollection } from './auto-collection';
 import { ReviewsApp } from './reviews/reviews-app';
 import { receiveReviewsResponse } from './reviews/reviews-store';
 
 // eslint-disable-next-line
 // @ts-ignore
 import tailwindcssOutput from './tailwind-output.css?inline';
-import { detectDataPlatformByUrl, logger, sendBackgroundEvent } from '@chrome-extension/shared/lib';
+import { type DataPlatform, detectDataPlatformByUrl, logger, sendBackgroundEvent } from '@chrome-extension/shared/lib';
 import { BACKGROUND_EVENTS, DATA_PLATFORMS } from '@chrome-extension/shared/enums';
 
 const APP_ID = 'mapscan_app';
+let manual = false;
 
 const platform = detectDataPlatformByUrl(document.location.href) as string;
 
@@ -62,6 +64,7 @@ function debounce<T extends (...args: any[]) => any>(func: T, wait: number): (..
 }
 
 const render = () => {
+  if (!manual) return;
   const url = document.location.href;
 
   if (!shouldRender({ platform, url })) {
@@ -116,7 +119,7 @@ const debouncedRender = debounce(render, 100);
 // content script runs at document_end, wiping our widget. Re-mount it whenever
 // it should be visible but is missing — no Ctrl+R needed.
 const ensureRendered = () => {
-  if (shouldRender({ platform, url: document.location.href }) && !document.getElementById(APP_ID)) {
+  if (manual && shouldRender({ platform, url: document.location.href }) && !document.getElementById(APP_ID)) {
     debouncedRender();
   }
 };
@@ -154,11 +157,17 @@ const observer = new MutationObserver(() => {
 
 observer.observe(document, { subtree: true, childList: true });
 
-// render the app (retry a few times for SPAs that mount their UI late)
-setTimeout(debouncedRender, 0);
-setTimeout(ensureRendered, 600);
-setTimeout(ensureRendered, 1500);
-setTimeout(ensureRendered, 3000);
+// Decide ownership before rendering the manual UI or starting any collection.
+void collectionAssignment().catch(() => undefined).then(job => {
+  if (job) {
+    void runAutoCollection(job, platform as DataPlatform);
+    return;
+  }
+  manual = true;
+  debouncedRender();
+  setTimeout(ensureRendered, 600);
+  setTimeout(ensureRendered, 1500);
+});
 
 // inject the script
 const injectScript = () => {

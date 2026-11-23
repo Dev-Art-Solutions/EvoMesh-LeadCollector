@@ -41,6 +41,11 @@ const Page = () => {
 
 const SettingsGeneralView = () => {
   const store = useStore();
+  const [token, setToken] = useState<string>();
+
+  useEffect(() => {
+    chrome.storage.local.get('collectorWorkerToken').then(settings => setToken(settings.collectorWorkerToken || ''));
+  }, []);
 
   const {
     export_format,
@@ -118,15 +123,29 @@ const SettingsGeneralView = () => {
         <input
           type="text"
           spellCheck={false}
-          placeholder="http://localhost:5050"
+          placeholder="http://127.0.0.1:5050"
           defaultValue={backend_url || ''}
           onBlur={e => handlers.onBackendChange(e.target.value)}
           className="mt-2 w-full rounded border border-neutral-300 px-2 py-1 text-sm outline-none focus:border-neutral-500"
         />
         <p className="mt-1 text-xs text-neutral-500">
-          The extension extracts contacts directly inside your browser. Optional: you can connect a local Puppeteer backend for advanced JS rendering.
+          Use a loopback address for automated collection. Standalone scraping and export are available without a worker token.
         </p>
       </div>
+      <label>
+        LeadCollector worker token
+        <input
+          type="password"
+          autoComplete="off"
+          disabled={token === undefined}
+          value={token || ''}
+          onChange={event => setToken(event.target.value)}
+          onBlur={() => {
+            if (token !== undefined) void chrome.storage.local.set({ collectorWorkerToken: token.trim() });
+          }}
+          className="mt-2 w-full rounded border border-neutral-300 px-2 py-1"
+        />
+      </label>
     </div>
   );
 };

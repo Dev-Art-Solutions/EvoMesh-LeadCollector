@@ -17,15 +17,18 @@ export class ApiService {
     method,
     body,
     timeoutMs,
+    token,
   }: {
     path: string;
     method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
     body?: Record<string, number | number[] | string | string[] | boolean>;
     timeoutMs?: number;
+    token?: string;
   }): Promise<IApiResponse<T>> {
     const { baseUrl } = this;
 
     const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
     if (body) {
       headers['Content-Type'] = 'application/json';
     }
@@ -36,6 +39,7 @@ export class ApiService {
     try {
       const response = await fetch(`${baseUrl}/${path}`, {
         method,
+        redirect: token ? 'error' : 'follow',
         headers,
         body: body ? JSON.stringify(body) : undefined,
         signal: controller.signal,
@@ -74,11 +78,13 @@ export class ApiService {
     });
   }
 
-  async extractWebsites({ urls }: { urls: string[] }) {
+  async extractWebsites({ urls, token }: { urls: string[]; token?: string }) {
     return this.request<IExtractWebsiteResult>({
       path: 'v1/extract-website',
       method: 'POST',
       body: { urls },
+      token,
+      timeoutMs: 100000,
     });
   }
 }

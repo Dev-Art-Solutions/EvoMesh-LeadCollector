@@ -26,39 +26,45 @@ const IS_PRODUCTION = NODE_ENV === 'production';
 
 const logger = new Logger();
 
-function parseOrigins(): boolean | string[] {
-  const raw = process.env.ALLOWED_ORIGINS?.trim();
-  if (!raw || raw === '*') return true; // allow any origin (self-hosted default)
-  return raw.split(',').map((o) => o.trim());
+function parseOrigins(): string[] {
+  const extension = 'chrome-extension://egdgjicbgiamheekmimkgmeligcipkco';
+  return [extension, ...(process.env.ALLOWED_ORIGINS || '').split(',').map(origin => origin.trim())]
+    .filter(origin => /^chrome-extension:\/\/[a-p]{32}$/.test(origin));
 }
 
 async function bootstrap() {
-  const host = process.env.HOST ?? '0.0.0.0';
+  const host = process.env.HOST ?? '127.0.0.1';
   const port = Number(process.env.PORT) || 5050;
 
   try {
+    if (!['127.0.0.1', '::1'].includes(host)) throw new Error('HOST must be a loopback IP address');
+    const agentToken = process.env.LEADCOLLECTOR_AGENT_TOKEN;
+    const workerToken = process.env.LEADCOLLECTOR_WORKER_TOKEN;
+    if (!agentToken || !workerToken || agentToken.length < 32 || workerToken.length < 32 || agentToken === workerToken) {
+      throw new Error('Configure two different LeadCollector tokens of at least 32 characters');
+    }
     const app = await NestFactory.create<NestFastifyApplication>(
       AppModule,
-      new FastifyAdapter(),
+      new FastifyAdapter({ bodyLimit: 2 * 1024 * 1024 }),
       {
         bufferLogs: true,
         logger: ['error', 'warn', 'log', 'debug', 'verbose'],
-        rawBody: true,
       },
     );
 
     NestLogger.overrideLogger(logger);
 
-    /** Rate limiting — the extract endpoint is public on a self-hosted box. */
+    /** Bound local request frequency. */
     await app.register(rateLimit, {
-      max: Number(process.env.RATE_LIMIT_MAX) || 60,
+      max: Number(process.env.RATE_LIMIT_MAX) || 240,
       timeWindow: process.env.RATE_LIMIT_WINDOW || '1 minute',
     });
 
-    /** CORS — allow the extension (and anything else if ALLOWED_ORIGINS is *). */
+    /** Allow extension origins and leave ordinary browser origins outside CORS. */
     app.enableCors({
       origin: parseOrigins(),
       methods: ['GET', 'POST', 'OPTIONS'],
+      allowedHeaders: ['Authorization', 'Content-Type'],
     });
 
     app.setGlobalPrefix(PREFIX, {
@@ -71,10 +77,13 @@ async function bootstrap() {
     app.useGlobalPipes(
       new ValidationPipe({
         transform: true,
+        whitelist: true,
+        forbidNonWhitelisted: true,
         disableErrorMessages: IS_PRODUCTION,
       }),
     );
 
+    app.enableShutdownHooks();
     await app.listen(port, host);
     logger.log(`🚀  Server listening on http://${host}:${port} (${NODE_ENV})`);
   } catch (err) {

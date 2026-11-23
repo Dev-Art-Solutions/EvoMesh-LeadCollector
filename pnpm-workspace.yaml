@@ -7,5 +7,4 @@ packages:
 
 onlyBuiltDependencies:
   - esbuild
-  - puppeteer
   - "@swc/core"

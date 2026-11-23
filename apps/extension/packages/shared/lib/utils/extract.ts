@@ -1,11 +1,26 @@
 import { IExtractWebsiteResult } from './../../interfaces';
 import { BACKGROUND_EVENTS, DATA_PARSING_MODES, DATA_PLATFORM_DOMAINS, DATA_PLATFORMS } from '../../enums';
-import { getLocalStorageValue, logger, sendBackgroundEvent } from './background';
+import { logger, sendBackgroundEvent } from './background';
 
 import { altitude } from './geo';
 import { randomize, sleep } from './interval';
 
 const GOOGLE_BASE_URL = 'https://www.google.com/search';
+
+export class MapCollectionError extends Error {
+  constructor(public readonly code: 'human_required' | 'map_unavailable') {
+    super(code);
+  }
+}
+
+function checkMapResponse(response: Response, signal?: AbortSignal) {
+  if (!signal) return;
+  if ([401, 403, 429, 451].includes(response.status) ||
+    /(?:sorry|consent|accounts)\.google\.|passport\.yandex\.|\/(?:sorry|showcaptcha|captcha)(?:\/|$)/i.test(response.url)) {
+    throw new MapCollectionError('human_required');
+  }
+  if (!response.ok) throw new MapCollectionError('map_unavailable');
+}
 
 export type DataPlatform = (typeof DATA_PLATFORMS)[keyof typeof DATA_PLATFORMS];
 export type DataParsingMode = (typeof DATA_PARSING_MODES)[keyof typeof DATA_PARSING_MODES];
@@ -20,6 +35,7 @@ interface IExtractMapsBaseOptions<S = any> {
   };
   controller: AbortController;
   extractWebsites?: boolean;
+  strict?: boolean;
   next?: boolean;
   complete: (props: { results: number }) => void;
   onRequestComplete: (props: { data: any[]; results: number }) => void;
@@ -190,7 +206,7 @@ export const extractGoogleMapsResults = async (options: IExtractGoogleMapsOption
     language,
     width,
     height,
-  });
+  }, options.strict ? signal : undefined);
 
   let data = response.data;
   const results = response.results;
@@ -352,13 +368,13 @@ export const fetchGoogleMapsResults = async (query: {
   take?: number;
   width: number;
   height: number;
-}): Promise<IExtractGoogleMapsResponse> => {
+}, signal?: AbortSignal): Promise<IExtractGoogleMapsResponse> => {
   const { lat, long, alt, search, page = 1, take = 20, psi, language, width, height } = query || {};
 
   try {
     // const gl = region;
     const lan = language;
-    const offset = page > 1 ? take * page : 0;
+    const offset = take * (page - 1);
 
     const url = constructGoogleMapsUrl(GOOGLE_BASE_URL, {
       lan,
@@ -389,21 +405,28 @@ export const fetchGoogleMapsResults = async (query: {
       return result;
     };
 
-    const data = await fetch(url)
+    const data = await fetch(url, { signal })
       .then(async response => {
+        checkMapResponse(response, signal);
         const text = await response.text();
-        const json: any[] = JSON.parse(JSON.parse(text.replace(/\)\]\}'\\n/, '').replace(`/*""*/`, ''))?.['d'] || '[]');
+        const payload = text.replace(/^\)\]\}'(?:\r?\n|\\n)/, '').replace('/*""*/', '');
+        const json: any[] = JSON.parse(JSON.parse(payload)?.['d'] || '[]');
 
         const results =
-          json?.[0]?.[1]?.slice(1, take + 1)?.map((el: any) => {
+          json?.[0]?.[1]?.slice(1, take + 1)?.flatMap((el: any) => {
             const data = el?.[14];
+            const title = data?.[11];
+            if (typeof title !== 'string' || !title.trim()) return [];
 
             const cid = data?.[10];
-            const cid_int = BigInt(cid.split(':')[1]).toString();
-            const maps_url = `https://www.google.com/maps?cid=${cid_int}`;
-            const review_url = data?.[4]?.[3]?.[0];
+            const cidHex = typeof cid === 'string' ? cid.split(':')[1] : undefined;
             const place_id = data?.[78];
-            const title = data?.[11];
+            const maps_url = cidHex && /^0x[0-9a-f]+$/i.test(cidHex)
+              ? `https://www.google.com/maps?cid=${BigInt(cidHex)}`
+              : typeof place_id === 'string' && place_id
+                ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(title)}&query_place_id=${encodeURIComponent(place_id)}`
+                : '';
+            const review_url = data?.[4]?.[3]?.[0];
             const address = data?.[39];
             const datafid = data?.[10];
             const rating = data?.[4]?.[7];
@@ -497,12 +520,13 @@ export const fetchGoogleMapsResults = async (query: {
               located_in,
             };
 
-            return output;
+            return [output];
           }) || [];
 
         return results as IGoogleMapsExtractItem[];
       })
       .catch((e: any) => {
+        if (signal) throw e;
         logger('google fetch results error', { e: e?.message });
         return [];
       });
@@ -518,6 +542,7 @@ export const fetchGoogleMapsResults = async (query: {
 
     return response;
   } catch (e) {
+    if (signal) throw e;
     console.log(e);
 
     const response: IExtractGoogleMapsResponse = {
@@ -535,7 +560,7 @@ export const fetchGoogleMapsResults = async (query: {
 // This works from the content script's isolated world (it can read
 // `location.href`), so it does not depend on the injected page script.
 const GOOGLE_MAPS_URL_PATTERN =
-  /maps\/(?:(\w+)\/?)?(?:([^/@]+)\/?)?@(-?\d+\.\d+),(-?\d+\.\d+),(\d+(?:\.\d+)?)([zm])/;
+  /maps\/(?:(\w+)\/?)?(?:([^/@]+)\/?)?@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(\d+(?:\.\d+)?)([zm])/;
 
 const parseGoogleMapsUrl = (
   url: string,
@@ -562,16 +587,14 @@ export const getGoogleMapsConfig = async () => {
   // Supplementary data captured by the injected page script (psi / language /
   // region), when available. Critical fields (search + coordinates) come from
   // the URL so extraction works even if the injected script is blocked by CSP.
-  const stored = await getLocalStorageValue<{
-    google_maps: {
-      language?: string;
-      psi?: string;
-      region?: string;
-      width?: number;
-      height?: number;
-    };
-  }>('config')
-    .then(data => data?.google_maps || {})
+  const stored = await sendBackgroundEvent<{
+    language?: string;
+    psi?: string;
+    region?: string;
+    width?: number;
+    height?: number;
+  }>({ type: BACKGROUND_EVENTS.GET_GOOGLE_MAPS_CONFIG })
+    .then(response => response?.data || {})
     .catch(() => ({} as Record<string, never>));
 
   const href = typeof location !== 'undefined' ? location.href : '';
@@ -670,6 +693,11 @@ export const extractYandexMapsResults = async (options: IExtractYandexMapsOption
   const data: IYandexMapsExtractItem[] = state.data || [];
   let results = state.results || 0;
 
+  if (options.strict && !items.length) {
+    complete({ results });
+    return;
+  }
+
   // fetch the items
   for await (const { url, element } of items) {
     // check if the signal aborted
@@ -678,7 +706,10 @@ export const extractYandexMapsResults = async (options: IExtractYandexMapsOption
     }
 
     // fetch data by url
-    const result = await fetchYandexMapsResultByUrl(url, { extractWebsites }).catch(() => null);
+    const result = await fetchYandexMapsResultByUrl(url, { extractWebsites, signal: options.strict ? signal : undefined }).catch(error => {
+      if (options.strict) throw error;
+      return null;
+    });
 
     // skip if there's no result
     if (!result) {
@@ -761,13 +792,14 @@ export const extractYandexMapsResults = async (options: IExtractYandexMapsOption
 
 export const fetchYandexMapsResultByUrl = async (
   url: string,
-  options?: { extractWebsites?: boolean },
+  options?: { extractWebsites?: boolean; signal?: AbortSignal },
 ): Promise<IYandexMapsExtractItem | null> => {
   const extractWebsites = options?.extractWebsites || false;
   const pattern = /<script type="application\/json" class="state-view">([^<]*)<\/script>/;
 
   // fetch the item
-  const response = await fetch(url).then(async response => {
+  const response = await fetch(url, { signal: options?.signal }).then(async response => {
+    checkMapResponse(response, options?.signal);
     const text = await response.text();
     const match = text.match(pattern);
     const content = match ? match?.[1] : null;
@@ -869,12 +901,16 @@ export const extract2GisMapsResults = async (options: IExtract2GisMapsOptions): 
     const url = update2GisMapsPageParameter({ url: options.url, page });
 
     // parse the page state
-    const query = await parse2GisMapsQueryParams({ url });
+    const query = await parse2GisMapsQueryParams({ url, signal: options.strict ? signal : undefined });
     const { elements = [] } = query || {};
 
     let total = state.total ? state.total : query?.total;
     let results = state.results || 0;
     const data = state.data || [];
+    if (options.strict && !elements.length) {
+      complete({ results });
+      return;
+    }
 
     // logger('2gis extract', { search, page, pages, results });
 
@@ -894,7 +930,8 @@ export const extract2GisMapsResults = async (options: IExtract2GisMapsOptions): 
         return;
       }
 
-      const response = await extract2GisMapsResultByUrl(url).catch(e => {
+      const response = await extract2GisMapsResultByUrl(url, options.strict ? signal : undefined).catch(e => {
+        if (options.strict) throw e;
         logger('2gis fetch error', { e: e?.message });
         return null;
       });
@@ -1022,12 +1059,14 @@ export const extract2GisMapsResults = async (options: IExtract2GisMapsOptions): 
       complete({ results });
     }
   } catch (e: any) {
+    if (options.strict) throw e;
     logger('2gis extract error', { error: e?.message });
   }
 };
 
-export const extract2GisMapsResultByUrl = async (url: string): Promise<I2GisMapsExtractItem | null> => {
-  const response = await fetch(url);
+export const extract2GisMapsResultByUrl = async (url: string, signal?: AbortSignal): Promise<I2GisMapsExtractItem | null> => {
+  const response = await fetch(url, { signal });
+  checkMapResponse(response, signal);
 
   const text = response ? await response.text() : null;
   const state = text ? parse2GisMapsPageState(text) : null;
@@ -1113,15 +1152,22 @@ export const extract2GisMapsResultByUrl = async (url: string): Promise<I2GisMaps
   return output;
 };
 
-export const parse2GisMapsQueryParams = async ({ url }: { url: string }) => {
+export const parse2GisMapsQueryParams = async ({ url, signal }: { url: string; signal?: AbortSignal }) => {
   if (!url) return null;
 
-  const text = await fetch(url)
-    .then(async response => await response.text())
-    .catch(() => null);
+  const text = await fetch(url, { signal })
+    .then(async response => {
+      checkMapResponse(response, signal);
+      return response.text();
+    })
+    .catch(error => {
+      if (signal) throw error;
+      return null;
+    });
   if (!text) return {};
 
   const state = parse2GisMapsPageState(text);
+  if (!state && signal) throw new MapCollectionError('map_unavailable');
   if (!state) return {};
 
   const origin = new URL(url).origin;

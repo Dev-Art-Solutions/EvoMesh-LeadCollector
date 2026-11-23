@@ -1,198 +1,163 @@
-import * as puppeteer from 'puppeteer';
+import { load } from 'cheerio';
+import { Injectable } from '@nestjs/common';
 import type { CountryCode } from 'libphonenumber-js';
+import {
+  bestEmail,
+  ContactPage,
+  ContactResult,
+  extractContacts,
+} from './extractors';
+import { observedContacts } from '../jobs/leads';
+import { setting } from '../jobs/collector.config';
+import { WebsiteError, WebsiteSession, websiteTarget } from './website-fetch';
 
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-
-import { performance } from '@/utils';
-import { Logger } from '@/modules/logger';
-import { PATTERNS, ServiceException, ServiceForbiddenException } from '@/common';
-
-import { extractContacts, ContactResult, RawPageData } from './extractors';
-
-const NAV_TIMEOUT = Number(process.env.EXTRACT_TIMEOUT) || 15000;
-const MAX_CONCURRENCY = Number(process.env.EXTRACT_CONCURRENCY) || 5;
-const DEFAULT_COUNTRY = (process.env.EXTRACT_DEFAULT_COUNTRY as CountryCode) || undefined;
-
-const USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-  '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
-
-// Anchor text / hrefs that likely point at a contact page.
-const CONTACT_LINK_RE = /contact|contacts|kontakt|контакт|about|impressum|связ/i;
-const BLOCKED_RESOURCES = new Set(['image', 'media', 'font']);
-
-/** Run async tasks with a bounded concurrency. */
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  worker: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let cursor = 0;
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor++;
-      results[index] = await worker(items[index]);
-    }
-  });
-  await Promise.all(runners);
-  return results;
+export function parseContactPage(
+  url: string,
+  html: string,
+  country?: CountryCode,
+): ContactPage {
+  const $ = load(html);
+  if (
+    $(
+      '#captcha, #challenge-form, iframe[src*="recaptcha"], iframe[src*="hcaptcha"]',
+    ).length
+  ) {
+    throw new WebsiteError('blocked', 'human_required');
+  }
+  const jsonLd = $('script[type="application/ld+json"]')
+    .map((_, el) => $(el).text())
+    .get()
+    .slice(0, 30);
+  const hrefs = $('a[href]')
+    .map((_, el) => $(el).attr('href'))
+    .get()
+    .slice(0, 500);
+  $('script,style,noscript,template,[hidden]').remove();
+  $('p,div,li,br,td,h1,h2,h3').append(' ');
+  const parsed = extractContacts(
+    url,
+    { text: $('body').text(), hrefs, jsonLd },
+    country,
+  );
+  const contacts = observedContacts({ ...parsed }, url, Date.now(), country);
+  return {
+    url,
+    emails: contacts
+      .filter((contact) => contact.type === 'email')
+      .map((contact) => contact.normalized),
+    phones: contacts
+      .filter((contact) => contact.type === 'phone')
+      .map((contact) => contact.normalized),
+    socials: contacts
+      .filter((contact) => contact.type === 'social')
+      .map((contact) => contact.normalized),
+  };
 }
 
 @Injectable()
-export class AppService implements OnModuleInit, OnModuleDestroy {
-  private browser: puppeteer.Browser | null = null;
+export class AppService {
+  private readonly timeout = setting('EXTRACT_TIMEOUT', 12000, 1000, 15000);
+  private readonly maxConcurrent = setting('EXTRACT_CONCURRENCY', 3, 1, 5);
+  private readonly country = process.env.EXTRACT_DEFAULT_COUNTRY as
+    | CountryCode
+    | undefined;
+  private active = 0;
 
-  constructor(private logger: Logger) {}
-
-  async onModuleInit() {
-    try {
-      await this.getBrowser();
-      this.logger.log('puppeteer: ok');
-    } catch (error) {
-      this.logger.error(`puppeteer: ${error.message}`);
-      this.browser = null;
-    }
-  }
-
-  async onModuleDestroy() {
-    if (this.browser) {
-      await this.browser.close();
-    }
-  }
-
-  async getBrowser(): Promise<puppeteer.Browser> {
-    if (!this.browser || !this.browser.connected) {
-      this.browser = await puppeteer.launch({
-        headless: true,
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-        args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
-        timeout: 60000,
-      });
-    }
-    return this.browser;
-  }
-
-  async extractWebsites({ urls }: { urls: string[] }) {
-    try {
-      const data = await mapWithConcurrency(urls, MAX_CONCURRENCY, (url) =>
-        this.extractWebsite({ url }).catch((e) => {
-          this.logger.error(`extract failed for ${url}: ${e.message}`);
-          return { url, emails: [], phones: [], socials: [] } as ContactResult;
-        }),
+  async extractWebsites(
+    { urls }: { urls: string[] },
+    cancellation: AbortSignal,
+  ) {
+    const signal = AbortSignal.any([cancellation, AbortSignal.timeout(85000)]);
+    const data: ContactResult[] = [];
+    for (
+      let i = 0;
+      i < urls.length && !signal.aborted;
+      i += this.maxConcurrent
+    ) {
+      data.push(
+        ...(await Promise.all(
+          urls
+            .slice(i, i + this.maxConcurrent)
+            .map((url) => this.extractWebsite({ url }, signal)),
+        )),
       );
-      return { data, results: data.length };
-    } catch (e) {
-      this.logger.error(e);
-      const exception = e.status
-        ? new ServiceException(e.message, e.status)
-        : new ServiceForbiddenException('failed to extract website');
-      throw exception;
     }
+    return { data, results: data.length };
   }
 
-  async extractWebsite({ url }: { url: string }): Promise<ContactResult> {
-    performance.start();
-
-    const normalized = this.normalizeUrl(url);
-    if (!normalized) {
-      return { url, emails: [], phones: [], socials: [], _exec: performance.complete() };
+  async extractWebsite(
+    { url }: { url: string },
+    cancellation?: AbortSignal,
+  ): Promise<ContactResult> {
+    if (this.active >= this.maxConcurrent) {
+      return {
+        url,
+        emails: [],
+        phones: [],
+        socials: [],
+        status: 'unavailable',
+        error: 'enrichment_busy',
+        attempted_urls: [],
+        pages: [],
+      };
     }
-
-    let hostname: string;
+    this.active++;
+    const timeout = AbortSignal.timeout(this.timeout);
+    const signal = cancellation
+      ? AbortSignal.any([timeout, cancellation])
+      : timeout;
+    let session: WebsiteSession | undefined;
+    const pages: ContactPage[] = [];
+    let state: ContactResult['status'] = 'not_found';
+    let error: string | undefined;
     try {
-      hostname = new URL(normalized).hostname;
-    } catch {
-      return { url, emails: [], phones: [], socials: [], _exec: performance.complete() };
-    }
-
-    // Don't crawl social networks themselves.
-    if (PATTERNS.SOCIAL_DOMAIN.test(hostname)) {
-      return { url: normalized, emails: [], phones: [], socials: [], _exec: performance.complete() };
-    }
-
-    const browser = await this.getBrowser();
-
-    // Scrape the landing page (with one retry), then optionally the contact page.
-    let raw = await this.scrapePage(browser, normalized).catch(() => null);
-    if (!raw) raw = await this.scrapePage(browser, normalized).catch(() => null);
-    if (!raw) {
-      return { url: normalized, emails: [], phones: [], socials: [], _exec: performance.complete() };
-    }
-
-    let merged = raw;
-    const contactUrl = this.findContactLink(raw.hrefs, normalized);
-    if (contactUrl) {
-      const contactRaw = await this.scrapePage(browser, contactUrl).catch(() => null);
-      if (contactRaw) merged = this.mergeRaw(raw, contactRaw);
-    }
-
-    const result = extractContacts(normalized, merged, DEFAULT_COUNTRY);
-    result._exec = performance.complete();
-    return result;
-  }
-
-  private normalizeUrl(url: string): string | null {
-    if (!url) return null;
-    const trimmed = url.trim();
-    if (!trimmed) return null;
-    return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  }
-
-  /** Load a page (JS enabled, heavy assets blocked) and collect raw contact data. */
-  private async scrapePage(browser: puppeteer.Browser, url: string): Promise<RawPageData> {
-    const page = await browser.newPage();
-    try {
-      page.setDefaultTimeout(NAV_TIMEOUT);
-      await page.setUserAgent(USER_AGENT);
-      await page.setRequestInterception(true);
-      page.on('request', (request) => {
-        if (BLOCKED_RESOURCES.has(request.resourceType())) request.abort();
-        else request.continue();
-      });
-
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-
-      return await page.evaluate(() => {
-        const hrefs = Array.from(document.querySelectorAll('a[href]')).map(
-          (a) => (a as HTMLAnchorElement).href,
-        );
-        const jsonLd = Array.from(
-          document.querySelectorAll('script[type="application/ld+json"]'),
-        ).map((s) => s.textContent || '');
-        return { text: document.body?.innerText || '', hrefs, jsonLd };
-      });
-    } finally {
-      await page.close().catch(() => undefined);
-    }
-  }
-
-  private findContactLink(hrefs: string[], baseUrl: string): string | null {
-    let baseHost: string;
-    try {
-      baseHost = new URL(baseUrl).hostname;
-    } catch {
-      return null;
-    }
-    for (const href of hrefs) {
-      if (!CONTACT_LINK_RE.test(href)) continue;
-      try {
-        const u = new URL(href, baseUrl);
-        if (u.hostname !== baseHost) continue; // stay on-site
-        if (u.href.replace(/\/$/, '') === baseUrl.replace(/\/$/, '')) continue;
-        return u.href;
-      } catch {
-        // ignore
+      const target = websiteTarget(url.trim());
+      session = new WebsiteSession(target, signal);
+      const landing = await session.page(target);
+      pages.push(
+        parseContactPage(landing.url.href, landing.html, this.country),
+      );
+      const $ = load(landing.html);
+      const links = $('a[href]')
+        .map((_, element) => $(element).attr('href'))
+        .get()
+        .slice(0, 500);
+      const contact = session.contactLink(links, landing.url);
+      if (contact) {
+        const page = await session.page(contact);
+        if (page.url.href !== landing.url.href)
+          pages.push(parseContactPage(page.url.href, page.html, this.country));
       }
+    } catch (failure) {
+      state =
+        failure instanceof WebsiteError
+          ? failure.status
+          : signal.aborted
+            ? 'unavailable'
+            : 'failed';
+      error =
+        failure instanceof WebsiteError
+          ? failure.code
+          : signal.aborted
+            ? 'timeout_or_cancelled'
+            : 'request_failed';
+    } finally {
+      this.active--;
     }
-    return null;
-  }
-
-  private mergeRaw(a: RawPageData, b: RawPageData): RawPageData {
+    const emails = [...new Set(pages.flatMap((page) => page.emails))];
+    const phones = [...new Set(pages.flatMap((page) => page.phones))];
+    const socials = [...new Set(pages.flatMap((page) => page.socials))];
     return {
-      text: `${a.text}\n${b.text}`,
-      hrefs: [...a.hrefs, ...b.hrefs],
-      jsonLd: [...a.jsonLd, ...b.jsonLd],
+      url,
+      email: bestEmail(emails),
+      emails,
+      phones,
+      socials,
+      pages,
+      status:
+        emails.length || phones.length || socials.length ? 'found' : state,
+      attempted_urls: [...(session?.attempted || [])],
+      error,
     };
   }
 }

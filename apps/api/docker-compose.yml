@@ -2,16 +2,16 @@ services:
   api:
     build:
       context: .
-      dockerfile: Dockerfile
-    image: geoleadscraper-api
-    restart: unless-stopped
-    ports:
-      - "${PORT:-5050}:5050"
+    image: evomesh-leadcollector-api
+    # Optional Linux host-network operation keeps the process on host loopback.
+    network_mode: host
     environment:
-      HOST: 0.0.0.0
-      PORT: 5050
-      NODE_ENV: production
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
-      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-60}
-      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-1 minute}
-      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium-browser
+      HOST: 127.0.0.1
+      PORT: ${PORT:-5050}
+      LEADCOLLECTOR_AGENT_TOKEN: ${LEADCOLLECTOR_AGENT_TOKEN:?Set an agent token}
+      LEADCOLLECTOR_WORKER_TOKEN: ${LEADCOLLECTOR_WORKER_TOKEN:?Set a worker token}
+      LEADCOLLECTOR_STATE_DIR: /var/lib/leadcollector
+    volumes:
+      - leadcollector:/var/lib/leadcollector
+volumes:
+  leadcollector:

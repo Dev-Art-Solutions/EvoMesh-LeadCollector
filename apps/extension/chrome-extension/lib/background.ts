@@ -2,7 +2,8 @@ import 'webextension-polyfill';
 
 import { BACKGROUND_EVENTS } from '@chrome-extension/shared/enums';
 import { type BackgroundMessagePayload, type IBackgroundMessageResponse } from '@chrome-extension/shared';
-import { api, getBackendUrl } from './api';
+import { api, getBackendUrl, localBackend } from './api';
+import { CollectionWorker, type CollectionJob, type WorkerPort } from './collection-worker';
 import { crawlWebsitesConcurrently } from './crawler';
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -21,106 +22,85 @@ const logger = (text: string, data?: Record<string, number | string | object | b
   }
 };
 
-/* ------------------------------------------------------------------ *
- *  MCP auto-collection bridge
- *  Poll the backend for collection jobs, drive the extension to scrape
- *  the requested map in a background tab, and submit the results back.
- * ------------------------------------------------------------------ */
+const WORKER_ALARM = 'leadcollector-poll';
+const activeKey = 'collectorActive';
+const marker = chrome.runtime.getURL('collection-tab.html');
+void chrome.storage.local.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => undefined);
 
-type AutoJob = {
-  job: { id: string; platform: string; query: string; url?: string; limit: number; extractContacts: boolean };
-  backend: string;
-  tabId: number;
-  timer: ReturnType<typeof setTimeout>;
-};
-
-let active: AutoJob | null = null;
-const JOB_TIMEOUT_MS = 4 * 60 * 1000;
-
-const buildMapsUrl = (job: AutoJob['job']): string => {
-  if (job.url) return job.url;
-  const q = encodeURIComponent(job.query);
-  switch (job.platform) {
-    case 'yandex_maps':
-      return `https://yandex.com/maps/?mode=search&text=${q}`;
-    case 'gis':
-      return `https://2gis.ru/search/${q}`;
-    case 'google_maps':
-    default:
-      return `https://www.google.com/maps/search/${q}`;
+const post: WorkerPort['post'] = async (backend, token, path, body) => {
+  try {
+    const response = await fetch(`${backend}/v1/jobs/${path}`, {
+      method: 'POST', redirect: 'error', credentials: 'omit', signal: AbortSignal.timeout(5000),
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    return { status: response.status, job: response.ok && response.status !== 204 ? await response.json() : undefined };
+  } catch {
+    return { status: 0 };
   }
 };
 
-const reportJobError = async (backend: string, jobId: string, error: string) => {
-  await fetch(`${backend}/v1/jobs/${jobId}/error`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ error }),
-  }).catch(() => undefined);
-};
-
-const finishJob = async (tabId: number) => {
-  if (!active || active.tabId !== tabId) return;
-  clearTimeout(active.timer);
-  const { tabId: id } = active;
-  active = null;
-  await chrome.tabs.remove(id).catch(() => undefined);
-};
-
-const startJob = async (backend: string, job: AutoJob['job']) => {
-  const url = buildMapsUrl(job);
-  const tab = await chrome.tabs.create({ url, active: false });
-  const tabId = tab.id as number;
-
-  const timer = setTimeout(async () => {
-    if (active && active.tabId === tabId) {
-      await reportJobError(backend, job.id, 'timed out while collecting');
-      await finishJob(tabId);
+const worker = new CollectionWorker({
+  loadActive: async () => (await chrome.storage.session.get(activeKey))[activeKey],
+  saveActive: active => active ? chrome.storage.session.set({ [activeKey]: active }) : chrome.storage.session.remove(activeKey),
+  loadOutbox: async () => (await chrome.storage.local.get('collectorOutbox')).collectorOutbox,
+  saveOutbox: outbox => outbox ? chrome.storage.local.set({ collectorOutbox: outbox }) : chrome.storage.local.remove('collectorOutbox'),
+  config: async () => {
+    const backend = localBackend(await getBackendUrl());
+    const { collectorWorkerToken, collectorWorkerId } = await chrome.storage.local.get(['collectorWorkerToken', 'collectorWorkerId']);
+    if (!backend || typeof collectorWorkerToken !== 'string' || collectorWorkerToken.length < 32) return;
+    const workerId = typeof collectorWorkerId === 'string' ? collectorWorkerId : crypto.randomUUID();
+    if (!collectorWorkerId) await chrome.storage.local.set({ collectorWorkerId: workerId });
+    return { backend, workerId, token: collectorWorkerToken, version: chrome.runtime.getManifest().version };
+  },
+  post,
+  openPlaceholder: async (job: CollectionJob) => {
+    const url = `${marker}#${job.id}-${job.attempt}`;
+    const existing = (await chrome.tabs.query({})).find(tab => (tab.pendingUrl || tab.url) === url);
+    const id = existing?.id ?? (await chrome.tabs.create({ url, active: false })).id;
+    if (id === undefined) throw new Error('Collection tab did not open');
+    return id;
+  },
+  navigate: async (id, url) => { await chrome.tabs.update(id, { url }); },
+  tab: id => chrome.tabs.get(id).catch(() => undefined),
+  close: async id => {
+    try {
+      await chrome.tabs.remove(id);
+    } catch {
+      if (await chrome.tabs.get(id).catch(() => undefined)) return false;
     }
-  }, JOB_TIMEOUT_MS);
+    await chrome.storage.session.remove(`collectorMapConfig:${id}`);
+    return true;
+  },
+  now: Date.now,
+});
 
-  active = { job, backend, tabId, timer };
-  logger('job started', { id: job.id, platform: job.platform, query: job.query, tabId });
-};
-
-const pollJobs = async () => {
-  if (active) return; // one job at a time
-  const backend = await getBackendUrl();
-  if (!backend) return;
-
-  const job = await fetch(`${backend}/v1/jobs/next`)
-    .then(r => (r.ok ? r.json() : null))
-    .catch(() => null);
-
-  if (!job || !job.id) return;
-
-  await startJob(backend, job).catch(async e => {
-    await reportJobError(backend, job.id, e?.message || 'failed to start');
-    active = null;
-  });
-};
-
-let pollTimer: ReturnType<typeof setTimeout> | null = null;
-const startPollLoop = () => {
-  if (pollTimer) return;
-  const tick = async () => {
-    await pollJobs().catch(() => undefined);
-    pollTimer = setTimeout(tick, 5000);
-  };
+const tick = () => { void worker.tick().catch(() => logger('LeadCollector worker could not reconcile')); };
+const initialize = async () => {
+  if (!(await chrome.alarms.get(WORKER_ALARM))) await chrome.alarms.create(WORKER_ALARM, { periodInMinutes: 0.5 });
+  await chrome.alarms.clear('gls-poll');
   tick();
 };
-
-// Heartbeat: wake the service worker periodically so polling resumes even if
-// the worker was suspended while idle.
-try {
-  chrome.alarms.create('gls-poll', { periodInMinutes: 1 });
-  chrome.alarms.onAlarm.addListener(alarm => {
-    if (alarm.name === 'gls-poll') startPollLoop();
+chrome.runtime.onStartup.addListener(() => { void initialize(); });
+chrome.runtime.onInstalled.addListener(() => { void initialize(); });
+chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === WORKER_ALARM) tick(); });
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && (changes.collectorWorkerToken || changes.store?.oldValue?.backend_url !== changes.store?.newValue?.backend_url)) tick();
+});
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.url && /captcha|\/sorry|consent\.google|accounts\.google|passport\.yandex/i.test(change.url)) {
+    void chrome.storage.session.get(activeKey).then(state => {
+      if (state[activeKey]?.tabId === tabId) tick();
+    });
+  }
+});
+chrome.tabs.onRemoved.addListener(tabId => {
+  void chrome.storage.session.get(activeKey).then(state => {
+    if (state[activeKey]?.tabId === tabId) tick();
+    void chrome.storage.session.remove(`collectorMapConfig:${tabId}`);
   });
-} catch {
-  // alarms may be unavailable in some contexts; the loop below still runs
-}
-startPollLoop();
+});
+void initialize().catch(() => logger('LeadCollector alarms could not initialize'));
 
 // Reconcile enrich_missing when optional permissions are granted or revoked at runtime
 try {
@@ -164,37 +144,31 @@ chrome.runtime.onMessage.addListener(
         });
       }
 
-      // a content script asks whether its tab was opened for an auto-collect job
+      const reply = (promise: Promise<unknown>) => {
+        promise.then(data => send({ data, error: false })).catch(() => send({ error: true, message: 'Collector operation failed' }));
+      };
       if (action === BACKGROUND_EVENTS.CONTENT_READY) {
-        const tabId = sender.tab?.id;
-        const job = active && tabId === active.tabId ? active.job : null;
-        send({ data: { job }, error: false });
+        reply(worker.ready(sender).then(job => ({ job })));
       }
-
+      if (action === BACKGROUND_EVENTS.JOB_PROGRESS) {
+        reply(worker.progress(sender, String(payload?.jobId), Number(payload?.count)));
+      }
       if (action === BACKGROUND_EVENTS.SUBMIT_JOB_RESULTS) {
-        const { jobId, data, results } = (payload as { jobId: string; data: any[]; results: number }) || {};
-        if (active && active.job.id === jobId) {
-          const backend = active.backend;
-          const tabId = active.tabId;
-          fetch(`${backend}/v1/jobs/${jobId}/results`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ data, results }),
-          })
-            .catch(() => undefined)
-            .finally(() => finishJob(tabId));
-        }
-        send({ data: {}, error: false });
+        reply(worker.report(sender, String(payload?.jobId), {
+          endpoint: 'results', body: { data: payload?.data },
+        }).then(accepted => ({ accepted })));
       }
-
       if (action === BACKGROUND_EVENTS.JOB_FAILED) {
-        const { jobId, error } = (payload as { jobId: string; error: string }) || {};
-        if (active && active.job.id === jobId) {
-          const backend = active.backend;
-          const tabId = active.tabId;
-          reportJobError(backend, jobId, error || 'collection failed').finally(() => finishJob(tabId));
-        }
-        send({ data: {}, error: false });
+        reply(worker.report(sender, String(payload?.jobId), {
+          endpoint: 'error', body: { code: payload?.code, error: payload?.error, data: payload?.data },
+        }).then(accepted => ({ accepted })));
+      }
+      const mapKey = `collectorMapConfig:${sender.tab?.id}`;
+      if (action === BACKGROUND_EVENTS.UPDATE_GOOGLE_MAPS_CONFIG && sender.tab?.id !== undefined && sender.frameId === 0) {
+        reply(chrome.storage.session.set({ [mapKey]: payload }));
+      }
+      if (action === BACKGROUND_EVENTS.GET_GOOGLE_MAPS_CONFIG && sender.tab?.id !== undefined) {
+        reply(chrome.storage.session.get(mapKey).then(state => state[mapKey]));
       }
 
       if (action === BACKGROUND_EVENTS.OPEN_NEW_TAB) {
@@ -245,9 +219,6 @@ const handleBackgroundEvent = ({
     case BACKGROUND_EVENTS.CHECK_BACKEND:
       handle(handlers.checkBackend());
       break;
-    case BACKGROUND_EVENTS.UPDATE_GOOGLE_MAPS_CONFIG:
-      handle(handlers.getGoogleMapsConfig(payload));
-      break;
   }
 };
 
@@ -271,7 +242,7 @@ const handlers = {
   },
 
   extractWebsites: async ({ urls }: { urls: string[] }) => {
-    // 1. If backend is configured and running, try backend first (Puppeteer)
+    // 1. If backend is configured and running, try the local backend first
     try {
       const now = Date.now();
       const isCachedHealthy = backendStatusCache && (now - backendStatusCache.timestamp < 30000) && backendStatusCache.available;
@@ -288,7 +259,8 @@ const handlers = {
             backendStatusCache = { available: canUseBackend, timestamp: now };
           }
           if (canUseBackend) {
-            const { data, error } = await api.extractWebsites({ urls });
+            const { collectorWorkerToken } = localBackend(url) ? await chrome.storage.local.get('collectorWorkerToken') : {};
+            const { data, error } = await api.extractWebsites({ urls, token: collectorWorkerToken });
             if (!error) {
               logger('Extracted websites via local backend', { count: data?.data?.length || 0 });
               return data || { data: [], results: 0 };
@@ -318,8 +290,4 @@ const handlers = {
     return result;
   },
 
-  getGoogleMapsConfig: async (config: any) => {
-    chrome.storage.local.set({ config: { google_maps: config } });
-    return config;
-  },
 };
