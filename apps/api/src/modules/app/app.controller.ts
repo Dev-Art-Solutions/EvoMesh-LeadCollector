@@ -1,5 +1,15 @@
-import { Body, Controller, Get, Headers, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  HttpCode,
+  HttpStatus,
+  Post,
+  Res,
+} from '@nestjs/common';
 
+import type { FastifyReply } from 'fastify';
 import { AppService } from './app.service';
 import { ExtractWebsiteDto } from './app.dto';
 import { requireRole } from '../jobs/collector.config';
@@ -18,9 +28,19 @@ export class AppController {
   /** Extract contacts (emails, phones, socials) from a list of websites. */
   @HttpCode(HttpStatus.OK)
   @Post('extract-website')
-  async extractWebsite(@Headers('authorization') auth: string, @Body() body: ExtractWebsiteDto) {
+  async extractWebsite(
+    @Headers('authorization') auth: string,
+    @Body() body: ExtractWebsiteDto,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ) {
     requireRole(auth, 'agent', 'worker');
-    const { urls } = body;
-    return this.appService.extractWebsites({ urls });
+    const controller = new AbortController();
+    const disconnect = () => controller.abort();
+    reply.raw.once('close', disconnect);
+    try {
+      return await this.appService.extractWebsites(body, controller.signal);
+    } finally {
+      reply.raw.removeListener('close', disconnect);
+    }
   }
 }

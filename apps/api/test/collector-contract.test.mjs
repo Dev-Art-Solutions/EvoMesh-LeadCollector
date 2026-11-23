@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { request } from 'node:http';
 import { createServer } from 'node:net';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -59,7 +59,14 @@ test('stdio MCP interoperates with Nest, durable SQLite and fixture extension', 
     await delay(100);
   }
   assert.ok(ready, logs);
-  assert.match(logs, /127\.0\.0\.1/);
+  const nonLoopback = Object.values(networkInterfaces()).flat()
+    .find(address => address?.family === 'IPv4' && !address.internal);
+  if (nonLoopback) {
+    const externallyReachable = await fetch(`http://${nonLoopback.address}:${port}/`, {
+      signal: AbortSignal.timeout(500),
+    }).then(() => true, () => false);
+    assert.equal(externallyReachable, false, 'default server must bind only to loopback');
+  }
 
   function http(path, { role, method = 'GET', body, headers } = {}) {
     return fetch(`${base}/v1/${path}`, {

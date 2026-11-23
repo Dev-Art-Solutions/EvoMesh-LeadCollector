@@ -63,14 +63,22 @@ export class AppService {
     | undefined;
   private active = 0;
 
-  async extractWebsites({ urls }: { urls: string[] }) {
+  async extractWebsites(
+    { urls }: { urls: string[] },
+    cancellation: AbortSignal,
+  ) {
+    const signal = AbortSignal.any([cancellation, AbortSignal.timeout(85000)]);
     const data: ContactResult[] = [];
-    for (let i = 0; i < urls.length; i += this.maxConcurrent) {
+    for (
+      let i = 0;
+      i < urls.length && !signal.aborted;
+      i += this.maxConcurrent
+    ) {
       data.push(
         ...(await Promise.all(
           urls
             .slice(i, i + this.maxConcurrent)
-            .map((url) => this.extractWebsite({ url })),
+            .map((url) => this.extractWebsite({ url }, signal)),
         )),
       );
     }

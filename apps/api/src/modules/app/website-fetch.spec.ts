@@ -1,4 +1,4 @@
-import { parseContactPage } from './app.service';
+import { AppService, parseContactPage } from './app.service';
 import { publicAddress, WebsiteSession, websiteTarget } from './website-fetch';
 
 test.each([
@@ -86,4 +86,29 @@ test('parses observed shared contacts from HTML while excluding personal address
   expect(() =>
     parseContactPage(url, '<form id="challenge-form"></form>'),
   ).toThrow('human_required');
+});
+
+test('stops queuing website requests when the batch is cancelled', async () => {
+  const controller = new AbortController();
+  const service = new AppService();
+  const extract = jest
+    .spyOn(service, 'extractWebsite')
+    .mockImplementation(async ({ url }, signal) => {
+      controller.abort();
+      expect(signal.aborted).toBe(true);
+      return {
+        url,
+        status: 'unavailable',
+        emails: [],
+        phones: [],
+        socials: [],
+      };
+    });
+  const urls = Array.from(
+    { length: 10 },
+    (_, index) => `https://example.com/${index}`,
+  );
+  await service.extractWebsites({ urls }, controller.signal);
+  expect(extract.mock.calls.length).toBeGreaterThan(0);
+  expect(extract.mock.calls.length).toBeLessThan(urls.length);
 });

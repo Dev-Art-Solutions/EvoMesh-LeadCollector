@@ -1,4 +1,4 @@
-import { lookup } from 'node:dns/promises';
+import { Resolver } from 'node:dns/promises';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
@@ -68,13 +68,31 @@ type Response = {
 
 async function requestPinned(url: URL, signal: AbortSignal): Promise<Response> {
   signal.throwIfAborted();
-  const addresses = await lookup(url.hostname, { all: true }).catch(() => {
+  const resolver = new Resolver({ timeout: 3000, tries: 1 });
+  const abort = () => resolver.cancel();
+  signal.addEventListener('abort', abort, { once: true });
+  const missing = (error: NodeJS.ErrnoException): string[] => {
+    signal.throwIfAborted();
+    if (error.code === 'ENODATA' || error.code === 'ENOTFOUND') return [];
     throw new WebsiteError('unavailable', 'dns_unavailable');
-  });
-  if (
-    addresses.length === 0 ||
-    addresses.some(({ address }) => !publicAddress(address))
-  ) {
+  };
+  let addresses: { address: string; family: 4 | 6 }[];
+  try {
+    const [ipv4, ipv6] = await Promise.all([
+      resolver.resolve4(url.hostname).catch(missing),
+      resolver.resolve6(url.hostname).catch(missing),
+    ]);
+    addresses = [
+      ...ipv4.map((address) => ({ address, family: 4 as const })),
+      ...ipv6.map((address) => ({ address, family: 6 as const })),
+    ];
+  } finally {
+    resolver.cancel();
+    signal.removeEventListener('abort', abort);
+  }
+  if (!addresses.length)
+    throw new WebsiteError('unavailable', 'dns_unavailable');
+  if (addresses.some(({ address }) => !publicAddress(address))) {
     throw new WebsiteError('blocked', 'non_public_dns');
   }
   signal.throwIfAborted();
