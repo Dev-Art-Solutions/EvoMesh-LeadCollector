@@ -56,12 +56,12 @@ export async function runAutoCollection(job: Job, platform: DataPlatform) {
     if (platform === DATA_PLATFORMS.GOOGLE_MAPS) {
       const deadline = Date.now() + 20000;
       let query = await getGoogleMapsConfig();
-      while ((!query.search || !query.lat || !query.long) && Date.now() < deadline) {
+      while ((!query.search) && Date.now() < deadline) {
         checkProvider();
         await sleep(1000);
         query = await getGoogleMapsConfig();
       }
-      if (!query.search || !query.lat || !query.long) throw new MapCollectionError('map_unavailable');
+      if (!query.search) throw new MapCollectionError('map_unavailable');
       await extractGoogleMapsResults({ ...options<IGoogleMapsExtractItem>(), query, timeout: config.REQUEST_INTERVAL.GOOGLE_MAPS });
     } else if (platform === DATA_PLATFORMS.YANDEX_MAPS) {
       const deadline = Date.now() + 15000;

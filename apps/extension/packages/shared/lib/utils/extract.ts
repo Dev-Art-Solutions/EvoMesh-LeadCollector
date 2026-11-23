@@ -409,18 +409,24 @@ export const fetchGoogleMapsResults = async (query: {
       .then(async response => {
         checkMapResponse(response, signal);
         const text = await response.text();
-        const json: any[] = JSON.parse(JSON.parse(text.replace(/\)\]\}'\\n/, '').replace(`/*""*/`, ''))?.['d'] || '[]');
+        const payload = text.replace(/^\)\]\}'(?:\r?\n|\\n)/, '').replace('/*""*/', '');
+        const json: any[] = JSON.parse(JSON.parse(payload)?.['d'] || '[]');
 
         const results =
-          json?.[0]?.[1]?.slice(1, take + 1)?.map((el: any) => {
+          json?.[0]?.[1]?.slice(1, take + 1)?.flatMap((el: any) => {
             const data = el?.[14];
+            const title = data?.[11];
+            if (typeof title !== 'string' || !title.trim()) return [];
 
             const cid = data?.[10];
-            const cid_int = BigInt(cid.split(':')[1]).toString();
-            const maps_url = `https://www.google.com/maps?cid=${cid_int}`;
-            const review_url = data?.[4]?.[3]?.[0];
+            const cidHex = typeof cid === 'string' ? cid.split(':')[1] : undefined;
             const place_id = data?.[78];
-            const title = data?.[11];
+            const maps_url = cidHex && /^0x[0-9a-f]+$/i.test(cidHex)
+              ? `https://www.google.com/maps?cid=${BigInt(cidHex)}`
+              : typeof place_id === 'string' && place_id
+                ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(title)}&query_place_id=${encodeURIComponent(place_id)}`
+                : '';
+            const review_url = data?.[4]?.[3]?.[0];
             const address = data?.[39];
             const datafid = data?.[10];
             const rating = data?.[4]?.[7];
@@ -514,7 +520,7 @@ export const fetchGoogleMapsResults = async (query: {
               located_in,
             };
 
-            return output;
+            return [output];
           }) || [];
 
         return results as IGoogleMapsExtractItem[];
@@ -554,7 +560,7 @@ export const fetchGoogleMapsResults = async (query: {
 // This works from the content script's isolated world (it can read
 // `location.href`), so it does not depend on the injected page script.
 const GOOGLE_MAPS_URL_PATTERN =
-  /maps\/(?:(\w+)\/?)?(?:([^/@]+)\/?)?@(-?\d+\.\d+),(-?\d+\.\d+),(\d+(?:\.\d+)?)([zm])/;
+  /maps\/(?:(\w+)\/?)?(?:([^/@]+)\/?)?@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(\d+(?:\.\d+)?)([zm])/;
 
 const parseGoogleMapsUrl = (
   url: string,

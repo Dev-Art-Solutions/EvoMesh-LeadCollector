@@ -67,6 +67,12 @@ files.
 /browser status
 ```
 
+If you are running the packaged EvoMesh desktop instead of a source
+checkout, install the template before spawning it with
+`/agent-template install "C:/Dev/EvoMesh/agent-templates/lead-researcher"`
+using the companion source checkout. Use that checkout for the browser
+bridge installation files as well.
+
 Use an absolute `node.exe` path if needed. For an explicit tool allowlist
 and `McpServerConfig` example, see the companion setup guide. The optional
 automation `interact` grant allows the agent to manage the dedicated
