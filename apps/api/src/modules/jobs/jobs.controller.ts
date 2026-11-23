@@ -2,63 +2,146 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
-  HttpStatus,
   Param,
+  ParseUUIDPipe,
   Post,
+  Query,
 } from '@nestjs/common';
-
-import { ServiceNotFoundException } from '@/common';
-
+import { requireRole } from './collector.config';
+import {
+  AssignmentDto,
+  CreateJobDto,
+  ExportDto,
+  HeartbeatDto,
+  JobErrorDto,
+  PageDto,
+  SubmitJobResultsDto,
+  WorkerDto,
+} from './jobs.dto';
 import { JobsService } from './jobs.service';
-import { CreateJobDto, JobErrorDto, SubmitJobResultsDto } from './jobs.dto';
 
 @Controller('jobs')
 export class JobsController {
-  constructor(private jobs: JobsService) {}
+  constructor(private readonly jobs: JobsService) {}
 
-  /** Create a collection job (called by the MCP server). */
-  @HttpCode(HttpStatus.CREATED)
   @Post()
-  create(@Body() body: CreateJobDto) {
+  create(@Headers('authorization') auth: string, @Body() body: CreateJobDto) {
+    requireRole(auth, 'agent');
     return this.jobs.create(body);
   }
 
-  /** Claim the next pending job (polled by the extension running in Chrome). */
-  @HttpCode(HttpStatus.OK)
-  @Get('next')
-  next() {
-    return this.jobs.claimNext();
+  @Post('next')
+  @HttpCode(200)
+  next(@Headers('authorization') auth: string, @Body() body: WorkerDto) {
+    requireRole(auth, 'worker');
+    return this.jobs.claim(body.workerId, body.version) ?? {};
   }
 
-  @HttpCode(HttpStatus.OK)
   @Get()
-  list() {
+  list(@Headers('authorization') auth: string) {
+    requireRole(auth, 'agent');
     return this.jobs.list();
   }
 
-  @HttpCode(HttpStatus.OK)
   @Get(':id')
-  get(@Param('id') id: string) {
-    const job = this.jobs.get(id);
-    if (!job) throw new ServiceNotFoundException('job not found');
-    return job;
+  get(
+    @Headers('authorization') auth: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    requireRole(auth, 'agent');
+    return this.jobs.status(id);
   }
 
-  /** Submit collected results (called by the extension when a job completes). */
-  @HttpCode(HttpStatus.OK)
+  @Get(':id/results')
+  results(
+    @Headers('authorization') auth: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() page: PageDto,
+  ) {
+    requireRole(auth, 'agent');
+    return this.jobs.results(id, page);
+  }
+
+  @Post(':id/heartbeat')
+  @HttpCode(200)
+  heartbeat(
+    @Headers('authorization') auth: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: HeartbeatDto,
+  ) {
+    requireRole(auth, 'worker');
+    return this.jobs.heartbeat(id, body, body.phase, body.count);
+  }
+
+  @Post(':id/release')
+  @HttpCode(204)
+  release(
+    @Headers('authorization') auth: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: AssignmentDto,
+  ) {
+    requireRole(auth, 'worker');
+    this.jobs.release(id, body);
+  }
+
   @Post(':id/results')
-  submit(@Param('id') id: string, @Body() body: SubmitJobResultsDto) {
-    const job = this.jobs.submit(id, body.data, body.results);
-    if (!job) throw new ServiceNotFoundException('job not found');
-    return job;
+  @HttpCode(200)
+  submit(
+    @Headers('authorization') auth: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: SubmitJobResultsDto,
+  ) {
+    requireRole(auth, 'worker');
+    return this.jobs.submit(id, body, body.data);
   }
 
-  @HttpCode(HttpStatus.OK)
   @Post(':id/error')
-  fail(@Param('id') id: string, @Body() body: JobErrorDto) {
-    const job = this.jobs.fail(id, body.error);
-    if (!job) throw new ServiceNotFoundException('job not found');
-    return job;
+  @HttpCode(200)
+  fail(
+    @Headers('authorization') auth: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: JobErrorDto,
+  ) {
+    requireRole(auth, 'worker');
+    return this.jobs.fail(id, body, body.code, body.error, body.data);
+  }
+
+  @Post(':id/cancel')
+  @HttpCode(200)
+  cancel(
+    @Headers('authorization') auth: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    requireRole(auth, 'agent');
+    return this.jobs.cancel(id);
+  }
+
+  @Post(':id/export')
+  export(
+    @Headers('authorization') auth: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: ExportDto,
+  ) {
+    requireRole(auth, 'agent');
+    return this.jobs.export(id, body.format);
+  }
+}
+
+@Controller()
+export class CollectorController {
+  constructor(private readonly jobs: JobsService) {}
+
+  @Get('leads')
+  search(@Headers('authorization') auth: string, @Query() page: PageDto) {
+    requireRole(auth, 'agent');
+    return this.jobs.search(page);
+  }
+
+  @Get('health')
+  health(@Headers('authorization') auth: string) {
+    requireRole(auth, 'agent');
+    return this.jobs.health();
   }
 }

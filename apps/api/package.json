@@ -1,7 +1,7 @@
 {
   "name": "mapscan_api",
   "version": "1.0.0",
-  "description": "Stateless website contact-scraping backend for the GeoLeadScraper extension.",
+  "description": "Local job storage and website contact extraction for EvoMesh-LeadCollector.",
   "private": true,
   "license": "MIT",
   "scripts": {
@@ -14,7 +14,7 @@
     "mcp": "node mcp-server.mjs",
     "lint": "eslint \"{src,test}/**/*.ts\" --fix",
     "type-check": "tsc --noEmit -p tsconfig.json",
-    "test": "jest",
+    "test": "jest --runInBand",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage"
   },
@@ -24,15 +24,17 @@
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-fastify": "^11.0.0",
+    "cheerio": "^1.2.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.0",
+    "ipaddr.js": "^2.5.0",
     "libphonenumber-js": "^1.11.0",
     "pino": "^9.5.0",
     "pino-pretty": "^13.0.0",
-    "puppeteer": "^24.0.0",
     "reflect-metadata": "^0.2.2",
+    "robots-parser": "^3.1.1",
     "rxjs": "^7.8.1",
     "zod": "^4.0.0"
   },
@@ -56,7 +58,11 @@
     "typescript": "^5.7.0"
   },
   "jest": {
-    "moduleFileExtensions": ["js", "json", "ts"],
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
@@ -65,7 +71,9 @@
     "moduleNameMapper": {
       "^@/(.*)$": "<rootDir>/$1"
     },
-    "collectCoverageFrom": ["**/*.(t|j)s"],
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
   }

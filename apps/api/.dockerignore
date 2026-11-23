@@ -21,4 +21,4 @@ README.md
 .eslintrc.js
 nodemon.json
 test
-coverage
+coverage.leadcollector

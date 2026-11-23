@@ -18,7 +18,6 @@ export class ServiceExceptionInterceptor implements NestInterceptor {
           const { message, status } = error;
           throw new HttpException(message, status);
         } else {
-          console.log('service error:', error);
           throw error;
         }
       }),

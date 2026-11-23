@@ -7,17 +7,17 @@
   "type": "module",
   "packageManager": "pnpm@9.4.0",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "build": "turbo build",
-    "build:extension": "pnpm --filter mapscan_extension build:local",
+    "build:extension": "turbo run build --filter=!mapscan_api",
     "build:api": "pnpm --filter mapscan_api build",
     "dev:extension": "pnpm --filter mapscan_extension start:dev",
     "dev:api": "pnpm --filter mapscan_api start:dev",
     "lint": "turbo lint --continue",
-    "type-check": "turbo type-check",
-    "test": "turbo test",
+    "type-check": "turbo type-check --filter=!mapscan_extension",
+    "test": "turbo test --filter=!mapscan_extension",
     "clean": "turbo clean && rimraf node_modules"
   },
   "devDependencies": {

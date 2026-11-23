@@ -1,6 +1,8 @@
-# GeoLeadScraper — Free Google Maps Scraper (Chrome Extension)
+# EvoMesh-LeadCollector
 
-**GeoLeadScraper is a free, open-source Google Maps scraper** — a Chrome /
+This fork builds on [ozhehkovski/geoleadscraper](https://github.com/ozhehkovski/geoleadscraper). The original MIT license and copyright are preserved in [LICENSE](LICENSE).
+
+**EvoMesh-LeadCollector is a free, open-source business listing collector** — a Chrome /
 Chromium extension that extracts public business data from **Google Maps**
 (plus **Yandex Maps** and **2GIS**) and exports it to **CSV, XLSX or JSON** in
 one click. No account, no API key, no quotas, no tracking.
@@ -31,7 +33,7 @@ names, addresses, phone numbers, websites, ratings, reviews and more.
 - ⭐ **Google Maps reviews export** — download every review of a business (text, rating, date, owner reply, photos).
 - 🧲 **Built for lead generation** — turn any map search into a list of business leads.
 - ⚡ **Standalone in-browser contact enrichment** — scrapes **emails, phone numbers and social links** directly from business websites inside your browser (no backend or Docker required!).
-- 🔌 **Optional self-hosted backend** — for users who want server-side Puppeteer rendering.
+- 🔌 **Optional local backend** — persistent jobs, bounded contact extraction and artifact exports.
 - 🤖 **MCP server included** — let Claude (or any MCP client) collect and analyze leads on command.
 - 🕵️ **Private** — runs locally, your data never touches our servers (there are none).
 
@@ -68,9 +70,9 @@ per person…) · photo links · owner response · review link.
 > use the Releases zip above, or build it yourself.
 
 ### Build from source
-Requirements: Node.js >= 20 and pnpm >= 9 (`npm i -g pnpm`).
+Requirements: Node.js 22.13 or newer and pnpm 9.4 (`npm install -g pnpm@9.4.0`).
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm build:extension
 ```
 Then in Chrome: open `chrome://extensions` → enable **Developer mode** →
@@ -90,15 +92,15 @@ in to Google, because Maps shows only a limited view without reviews to signed-o
 ### Website contact enrichment (emails / phones / socials)
 GeoLeadScraper includes an opt-in **built-in standalone in-browser crawler** that visits business websites with missing contacts before export. You can enable it in extension **Settings** ("Enrich missing email / phone"), which asks for permission to access websites at runtime.
 
-It performs a fast, plain HTML fetch client-side in your browser with zero backend setup. Note that because it fetches raw HTML without rendering JavaScript, JS-only (SPA) websites won't yield contacts — for full JavaScript rendering, use the optional Puppeteer backend below. A live progress indicator shows real-time enrichment progress during export.
+Standalone enrichment fetches HTML in Chrome and reports progress during export. JavaScript-only contact details may be unavailable.
 
-#### Optional: Puppeteer backend
-For advanced users who prefer headless server-side crawling with JavaScript rendering:
-```bash
-pnpm dev:api
-# or: cd apps/api && docker compose up --build
-```
-Then open extension **Settings** and set the **Backend URL** (default `http://localhost:5050`). When enabled, the backend is used if running; otherwise, the extension seamlessly falls back to the in-browser crawler.
+#### Optional local backend
+
+Use the [Windows setup guide](docs/WINDOWS_SETUP.md) to provision the two
+local credentials, build the API and connect the extension. The backend
+stores durable jobs and lead observations, and extracts contacts from
+bounded public HTML requests. Use the dedicated EvoMesh automation
+profile for agent-triggered work.
 
 ### Optional: MCP server (collect leads from Claude)
 A built-in [MCP server](apps/api/MCP.md) lets an AI assistant such as Claude run
@@ -109,7 +111,7 @@ See [apps/api/MCP.md](apps/api/MCP.md).
 ```
 geoleadscraper/
 └── apps/
-    ├── api/         # Optional stateless backend (NestJS + Puppeteer) + MCP server
+    ├── api/         # Local NestJS API, SQLite and MCP server
     └── extension/   # Chrome MV3 extension (Turborepo + Vite + React)
 ```
 Tooling: **pnpm workspaces + Turborepo**.
@@ -143,7 +145,7 @@ No paid limit. You can collect the businesses Google Maps returns for a search;
 use a reasonable pace to stay within the platforms' terms of service.
 
 **Can it scrape emails and phone numbers from business websites?**
-Yes! You can enable "Enrich missing email / phone" in extension Settings. When enabled, GeoLeadScraper asks for permission to access websites and extracts emails, phone numbers, and social links from company websites during export. It uses plain HTML fetch without JavaScript rendering; for sites that require JavaScript execution, the optional Puppeteer backend can be used.
+Yes! You can enable "Enrich missing email / phone" in extension Settings. When enabled, GeoLeadScraper asks for permission to access websites and extracts emails, phone numbers, and social links from company websites during export. It uses plain HTML fetch and may miss details rendered by JavaScript.
 
 **Does it work with Yandex Maps and 2GIS too?**
 Yes — the same extension scrapes Google Maps, Yandex Maps and 2GIS.

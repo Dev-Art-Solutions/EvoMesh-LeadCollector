@@ -70,21 +70,6 @@ const getRequestInterval = ({ platform }: { platform: DataPlatform }): number =>
   return interval;
 };
 
-// For auto-collection: wait until the page is actually ready to extract.
-// Google needs the @lat,long to appear in the URL after the SPA settles.
-const waitForExtractable = async (platform: DataPlatform): Promise<void> => {
-  const deadline = Date.now() + 20000;
-  if (platform !== DATA_PLATFORMS.GOOGLE_MAPS) {
-    await sleep(3000);
-    return;
-  }
-  while (Date.now() < deadline) {
-    const cfg = await getGoogleMapsConfig().catch(() => null);
-    if (cfg && cfg.lat && cfg.long && cfg.search) return;
-    await sleep(1000);
-  }
-};
-
 const App = ({ platform }: { platform: DataPlatform }) => {
   const [state, setState] = useState<IContentContextState>({
     platform,
@@ -116,8 +101,6 @@ const App = ({ platform }: { platform: DataPlatform }) => {
 
   const stateRef = useRef(state);
   const controllerRef = useRef<AbortController | null>(null);
-  // Set when this tab was opened by the backend for an MCP auto-collection job.
-  const autoJobRef = useRef<{ id: string; limit: number; extractContacts: boolean } | null>(null);
 
   const { completed, initiated, results, position, auto_download: autoDownload, extracting, backend_available } = state;
 
@@ -129,7 +112,7 @@ const App = ({ platform }: { platform: DataPlatform }) => {
     const extractWebsites = !!(state.backend_available && options?.extractWebsites);
     const url = document.location.href;
     const page = options?.page ? options.page : stateRef.current.page;
-    const limit = autoJobRef.current?.limit || EXTRACT_LIMIT;
+    const limit = EXTRACT_LIMIT;
     const controller = controllerRef.current as AbortController;
     const interval = getRequestInterval({ platform });
 
@@ -486,48 +469,9 @@ const App = ({ platform }: { platform: DataPlatform }) => {
   useEffect(() => {
     if (!completed) return;
 
-    // Auto-collection job: hand the results back to the backend (via the
-    // background worker) and let it close this tab. No file download.
-    if (autoJobRef.current) {
-      const job = autoJobRef.current;
-      autoJobRef.current = null;
-      sendBackgroundEvent({
-        type: BACKGROUND_EVENTS.SUBMIT_JOB_RESULTS,
-        payload: { jobId: job.id, data: state.data, results: state.results },
-      });
-      return;
-    }
-
     if (autoDownload) handlers.export();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [completed]);
-
-  // Auto-collection: if this tab was opened by the backend for an MCP job,
-  // start extracting once the page is ready and report the results back.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const res = await sendBackgroundEvent<{ job: { id: string; limit: number; extractContacts: boolean } | null }>({
-        type: BACKGROUND_EVENTS.CONTENT_READY,
-      }).catch(() => ({ data: null }) as { data: null });
-
-      const job = res?.data?.job;
-      if (!job || cancelled) return;
-
-      autoJobRef.current = { id: job.id, limit: job.limit, extractContacts: !!job.extractContacts };
-      logger('auto-collect job', { id: job.id, platform });
-
-      await waitForExtractable(platform);
-      if (cancelled) return;
-
-      handlers.extractStartClick();
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   useEffect(() => {
     init();

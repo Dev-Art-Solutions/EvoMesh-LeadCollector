@@ -28,3 +28,4 @@ postgres/
 
 # release artifacts
 *.zip
+.leadcollector/

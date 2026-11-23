@@ -1,48 +1,19 @@
-# @geoleadscraper/api
+# EvoMesh LeadCollector local API
 
-Stateless website **contact-scraping** backend for the GeoLeadScraper extension.
-No database, no auth, no billing — just a single endpoint that visits a list of
-URLs with Puppeteer and returns emails, phones and social links.
+The NestJS API stores jobs and leads in local SQLite. It provides the
+authenticated browser-worker protocol, a bounded public-website contact
+pipeline and a stdio MCP server.
 
-This service is **optional**: the extension scrapes maps entirely on its own.
-Run this only if you want website contact enrichment.
+From the repository root, install with `pnpm install --frozen-lockfile`
+and build with `pnpm build:api`. Use
+[Windows setup](../../docs/WINDOWS_SETUP.md) to provision local configuration.
+Run `pnpm --filter mapscan_api start` for the built API or `pnpm dev:api`
+for watch mode. Both require the local agent and worker credentials.
 
-## Endpoints
+See [MCP and HTTP](MCP.md), [architecture](../../docs/ARCHITECTURE.md), and
+[smoke tests](../../docs/SMOKE_TEST.md).
 
-| Method | Path                | Description                                  |
-| ------ | ------------------- | -------------------------------------------- |
-| GET    | `/`                 | Health check (used by the extension)         |
-| POST   | `/v1/extract-website` | `{ "urls": string[] }` → contacts per URL |
-
-Response shape per URL:
-```json
-{
-  "url": "https://acme.com",
-  "email": "info@acme.com",
-  "emails": ["info@acme.com", "sales@acme.com"],
-  "phones": ["+14155552671"],
-  "socials": ["https://facebook.com/acme"],
-  "_exec": 842
-}
-```
-
-## Run
-
-```bash
-# from the monorepo root
-pnpm --filter mapscan_api start:dev      # dev (watch)
-pnpm --filter mapscan_api build && pnpm --filter mapscan_api start
-
-# or with Docker (bundles Chromium)
-docker compose up --build
-```
-
-Copy `.env.example` → `.env` to tune host/port, CORS (`ALLOWED_ORIGINS`),
-rate limiting and the default phone-parsing country.
-
-## Test
-```bash
-pnpm --filter mapscan_api test
-```
-Unit tests cover the pure extractors in `src/modules/app/extractors`
-(email / phone / social) against HTML-derived fixtures.
+Docker is optional. The Compose example is for Linux host networking so
+the process still listens on host loopback. Supply the two local tokens
+through the operator's environment and run `docker compose up --build`
+from this directory. The Windows setup uses the native Node process.

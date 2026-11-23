@@ -19,5 +19,15 @@ export interface ContactResult {
   emails: string[];
   phones: string[];
   socials: string[];
-  _exec?: number;
+  status?: 'found' | 'not_found' | 'unavailable' | 'blocked' | 'failed';
+  attempted_urls?: string[];
+  error?: string;
+  pages?: ContactPage[];
+}
+
+export interface ContactPage {
+  url: string;
+  emails: string[];
+  phones: string[];
+  socials: string[];
 }

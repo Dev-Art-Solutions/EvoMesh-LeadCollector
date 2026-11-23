@@ -5,7 +5,7 @@ export const config = {
   // Default extraction cap per run (no plans/quotas anymore — everything is free).
   EXTRACT_LIMIT: 10000,
   // Default backend origin used for optional website contact enrichment.
-  DEFAULT_BACKEND_URL: 'http://localhost:5050',
+  DEFAULT_BACKEND_URL: 'http://127.0.0.1:5050',
   HOME_PAGE_URL: 'https://geoleadscraper.com',
   FAQ_URL: 'https://geoleadscraper.com/faq',
   GUIDE_URL: 'https://geoleadscraper.com/how-to-use',
