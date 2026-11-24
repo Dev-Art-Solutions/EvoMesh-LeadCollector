@@ -6,10 +6,11 @@ import { EnrichmentProcessor } from './enrichment.processor';
 
 import { LoggerModule } from '@/modules/logger';
 import { JobsModule } from '@/modules/jobs';
+import { DcSyncService } from '@/modules/datacollector';
 
 @Module({
   imports: [LoggerModule, JobsModule],
   controllers: [AppController],
-  providers: [AppService, EnrichmentProcessor],
+  providers: [AppService, EnrichmentProcessor, DcSyncService],
 })
 export class AppModule {}

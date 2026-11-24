@@ -107,6 +107,28 @@ const migrations = [
     generated_at INTEGER NOT NULL
   ) STRICT;
   `,
+  // 2: the Data Collector outbox (modules/datacollector). Additive.
+  `
+  CREATE TABLE dc_outbox (
+    event_id TEXT PRIMARY KEY,
+    source_key TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    payload TEXT NOT NULL CHECK(json_valid(payload)),
+    state TEXT NOT NULL CHECK(state IN ('pending','retry','acknowledged','dead_letter','cancelled')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    acked_at INTEGER,
+    UNIQUE(source_key, content_hash)
+  ) STRICT;
+  CREATE INDEX dc_outbox_due ON dc_outbox(state, next_attempt_at);
+  CREATE TABLE dc_exported_jobs (
+    job_id TEXT PRIMARY KEY,
+    exported_at INTEGER NOT NULL
+  ) STRICT;
+  `,
 ];
 
 export function transaction<T>(db: DatabaseSync, run: () => T): T {
