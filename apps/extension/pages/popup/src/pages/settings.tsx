@@ -139,9 +139,11 @@ const SettingsGeneralView = () => {
           autoComplete="off"
           disabled={token === undefined}
           value={token || ''}
-          onChange={event => setToken(event.target.value)}
-          onBlur={() => {
-            if (token !== undefined) void chrome.storage.local.set({ collectorWorkerToken: token.trim() });
+          onChange={event => {
+            // Save on every change: a click outside the popup closes it
+            // before a blur handler's write can finish, so the token was lost.
+            setToken(event.target.value);
+            void chrome.storage.local.set({ collectorWorkerToken: event.target.value.trim() });
           }}
           className="mt-2 w-full rounded border border-neutral-300 px-2 py-1"
         />

@@ -38,7 +38,7 @@ Node in the current terminal. Ctrl+C in that terminal stops it.
 
 The operator can retrieve the worker token in a separate PowerShell with
 `.\scripts\Start-LeadCollector.ps1 -ShowWorkerToken`. Paste it in the
-extension's password field and click outside the field to save. Avoid
+extension's password field; it is saved as you type. Avoid
 copying it into chat, transcripts, screenshots, shell arguments or tracked
 files.
 
