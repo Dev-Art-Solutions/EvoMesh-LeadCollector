@@ -58,13 +58,13 @@ export class CreateJobDto {
   @IsOptional()
   @IsInt()
   @Min(30)
-  @Max(1800)
+  @Max(7200)
   timeoutSeconds?: number;
 
   @IsOptional()
   @IsInt()
   @Min(1)
-  @Max(50)
+  @Max(500)
   enrichmentLimit?: number;
 }
 

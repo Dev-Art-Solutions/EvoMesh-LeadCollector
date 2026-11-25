@@ -91,7 +91,7 @@ const collection = {
   query: z.string().trim().min(1).max(300),
   limit: z.number().int().min(1).max(500).optional(),
   extract_contacts: z.boolean().optional(),
-  enrichment_limit: z.number().int().min(1).max(50).optional(),
+  enrichment_limit: z.number().int().min(1).max(500).optional(),
   request_id: requestKey.optional().describe('Reuse this key when retrying the same request'),
 };
 const jobId = { job_id: z.string().uuid() };
@@ -111,7 +111,7 @@ function create(args, requestId, signal) {
 }
 
 register('start_collection', 'Queue a bounded map collection and return immediately. Reuse request_id across retries.',
-  { ...collection, deadline_seconds: z.number().int().min(30).max(1800).optional(), owner: z.string().max(120).optional() },
+  { ...collection, deadline_seconds: z.number().int().min(30).max(7200).optional(), owner: z.string().max(120).optional() },
   async (args, signal) => {
     const requestId = args.request_id || randomUUID();
     try {
