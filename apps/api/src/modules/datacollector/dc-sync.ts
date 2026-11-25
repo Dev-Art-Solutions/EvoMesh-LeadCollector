@@ -114,6 +114,14 @@ export function envelope(
 
 type Envelope = ReturnType<typeof envelope>;
 
+/** The record a plain create stores: the payload's fields at the top, where
+ * the collector's dashboard and filters look, and the rest of the envelope
+ * under `dc_event`. upsert-batch still sends the envelope itself. */
+export function flatRecord(event: Record<string, unknown>): Record<string, unknown> {
+  const { payload, ...rest } = event;
+  return { ...((payload as Record<string, unknown>) ?? {}), dc_event: rest };
+}
+
 function insert(db: DatabaseSync, event: Envelope, now: number): boolean {
   const result = db
     .prepare(
@@ -366,7 +374,7 @@ export async function syncOnce(
             'X-API-Key': settings.apiKey,
             'Idempotency-Key': row.event_id,
           },
-          body: JSON.stringify({ data: JSON.parse(row.payload) }),
+          body: JSON.stringify({ data: flatRecord(JSON.parse(row.payload)) }),
           redirect: 'manual',
           signal: AbortSignal.timeout(30_000),
         },

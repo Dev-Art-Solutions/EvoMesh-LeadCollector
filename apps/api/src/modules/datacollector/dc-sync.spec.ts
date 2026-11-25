@@ -7,6 +7,8 @@ import { JobsService } from '../jobs/jobs.service';
 import {
   dcSettings,
   enqueueFinishedJobs,
+  envelope,
+  flatRecord,
   outboxCounts,
   syncOnce,
 } from './dc-sync';
@@ -138,4 +140,12 @@ test('a rejected key keeps events; a schema error is a dead letter', async () =>
     Date.now() + 10_000_000,
   );
   expect(outboxCounts(db).dead_letter).toBeGreaterThan(0);
+});
+
+test('a plain create stores the payload fields at the top of the record', () => {
+  const event = envelope('business', 'business:google_maps:x', { name: 'Acme', phone: '1' });
+  const record = flatRecord(event);
+  expect(record.name).toBe('Acme');
+  expect((record.dc_event as Record<string, unknown>).source_key).toBe('business:google_maps:x');
+  expect('payload' in (record.dc_event as Record<string, unknown>)).toBe(false);
 });
