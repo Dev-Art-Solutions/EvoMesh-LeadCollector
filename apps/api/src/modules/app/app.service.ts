@@ -57,7 +57,7 @@ export function parseContactPage(
 @Injectable()
 export class AppService {
   private readonly timeout = setting('EXTRACT_TIMEOUT', 12000, 1000, 15000);
-  private readonly maxConcurrent = setting('EXTRACT_CONCURRENCY', 3, 1, 5);
+  private readonly maxConcurrent = setting('EXTRACT_CONCURRENCY', 3, 1, 16);
   private readonly country = process.env.EXTRACT_DEFAULT_COUNTRY as
     | CountryCode
     | undefined;

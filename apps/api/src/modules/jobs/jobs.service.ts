@@ -639,22 +639,18 @@ export class JobsService implements OnModuleDestroy {
   nextEnrichment(): EnrichmentTask | undefined {
     const now = Date.now();
     this.maintain(now);
+    // One site at a time per job (its lease), but jobs no longer wait for
+    // each other: a whole-backend lease kept every job but one idle and made
+    // enrichment, not the map, the pace of a collection campaign.
     return transaction(this.db, () => {
-      if (
-        this.db
-          .prepare(
-            `SELECT 1 FROM jobs WHERE phase='enriching' AND enrichment_lease_at>?`,
-          )
-          .get(now)
-      )
-        return;
       const row = this.db
         .prepare(
           `SELECT r.job_id,r.lead_id,r.url FROM enrichment_runs r
         JOIN jobs j ON j.id=r.job_id WHERE j.status='running' AND j.phase='enriching' AND r.state='queued'
+          AND (j.enrichment_lease_at IS NULL OR j.enrichment_lease_at<=?)
         ORDER BY j.created_at, r.job_id, r.lead_id LIMIT 1`,
         )
-        .get();
+        .get(now);
       if (!row) return;
       const lease = now + 20000;
       this.db

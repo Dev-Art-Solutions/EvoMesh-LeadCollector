@@ -267,3 +267,20 @@ test('CSV and JSON export Unicode, escape formulas, and outlive retention', () =
   expect(service.list()).toHaveLength(0);
   expect(readFileSync(csv.path, 'utf8')).toBe(content);
 });
+
+test('two jobs are enriched side by side, each one site at a time', () => {
+  jest.spyOn(Date, 'now').mockReturnValue(100000);
+  const other = { ...source, place_id: 'branch-b', website: 'https://www.example.org/' };
+  const first = service.create({ ...google, extractContacts: true });
+  service.claim('chrome-a', '1');
+  service.submit(first.id, assignment, [source, other]);
+  // The browser slot is free once a job is enriching, so the next map job runs.
+  const second = service.create({ ...google, query: 'agencies in Hamburg', extractContacts: true });
+  expect(service.claim('chrome-a', '1')).toMatchObject({ id: second.id });
+  service.submit(second.id, assignment, [source]);
+  const a = service.nextEnrichment();
+  const b = service.nextEnrichment();
+  expect([a?.jobId, b?.jobId].sort()).toEqual([first.id, second.id].sort());
+  // The first job still has a queued site, but its lease is taken.
+  expect(service.nextEnrichment()).toBeUndefined();
+});
