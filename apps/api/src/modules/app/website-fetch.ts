@@ -1,4 +1,4 @@
-import { Resolver } from 'node:dns/promises';
+import { Resolver, lookup } from 'node:dns/promises';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
@@ -66,6 +66,22 @@ type Response = {
   body: string;
 };
 
+async function osAddresses(
+  hostname: string,
+  signal: AbortSignal,
+): Promise<{ address: string; family: 4 | 6 }[]> {
+  signal.throwIfAborted();
+  try {
+    const found = await lookup(hostname, { all: true, verbatim: true });
+    return found
+      .filter(({ family }) => family === 4 || family === 6)
+      .map(({ address, family }) => ({ address, family: family as 4 | 6 }));
+  } catch {
+    signal.throwIfAborted();
+    return [];
+  }
+}
+
 async function requestPinned(url: URL, signal: AbortSignal): Promise<Response> {
   signal.throwIfAborted();
   const resolver = new Resolver({ timeout: 3000, tries: 1 });
@@ -86,6 +102,13 @@ async function requestPinned(url: URL, signal: AbortSignal): Promise<Response> {
       ...ipv4.map((address) => ({ address, family: 4 as const })),
       ...ipv6.map((address) => ({ address, family: 6 as const })),
     ];
+  } catch (error) {
+    // The resolver's server list can be unusable while the OS resolves fine:
+    // on Windows it reads 127.0.0.1 when a local DNS proxy fronts the
+    // adapter, and every query was refused -- every site "dns_unavailable".
+    // The answer is still checked against publicAddress below and pinned.
+    if (!(error instanceof WebsiteError)) throw error;
+    addresses = await osAddresses(url.hostname, signal);
   } finally {
     resolver.cancel();
     signal.removeEventListener('abort', abort);

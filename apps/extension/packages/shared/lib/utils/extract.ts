@@ -356,6 +356,33 @@ const constructGoogleMapsUrl = (baseUrl: string, params: IGoogleMapsUrlParams) =
   return url.toString();
 };
 
+/** The place records of a /search?tbm=map response. Google has served three
+ * shapes: `{"d": "<json>"}`; the same with an XSSI `)]}'` prefix inside `d`
+ * (2026-11, which made every collection fail with map_unavailable); and, to
+ * the page's own request, a bare array. The classic layout keeps places at
+ * `[0][1][1..][14]`; otherwise a place is the long array whose `[11]` is its
+ * title, and the block holding the most of them is the result list (another
+ * block carries the sponsored listings). */
+export const googlePlaceRecords = (parsed: any): any[] => {
+  const xssi = /^\)\]\}'\r?\n?/;
+  let json = parsed;
+  if (parsed && !Array.isArray(parsed) && typeof parsed.d === 'string') {
+    json = JSON.parse(parsed.d.replace(xssi, '') || '[]');
+  }
+  if (!Array.isArray(json)) return [];
+  const head = json?.[0]?.[1];
+  const classic = Array.isArray(head) ? head.slice(1).map((el: any) => el?.[14]) : [];
+  if (classic.some((data: any) => typeof data?.[11] === 'string')) return classic;
+  const isPlace = (value: any) => Array.isArray(value) && value.length > 100 && typeof value[11] === 'string';
+  let best: any[] = [];
+  for (const block of json) {
+    if (!Array.isArray(block)) continue;
+    const places = block.flatMap((el: any) => (Array.isArray(el) ? el.filter(isPlace) : []));
+    if (places.length > best.length) best = places;
+  }
+  return best;
+};
+
 export const fetchGoogleMapsResults = async (query: {
   search: string;
   lat: number;
@@ -410,11 +437,10 @@ export const fetchGoogleMapsResults = async (query: {
         checkMapResponse(response, signal);
         const text = await response.text();
         const payload = text.replace(/^\)\]\}'(?:\r?\n|\\n)/, '').replace('/*""*/', '');
-        const json: any[] = JSON.parse(JSON.parse(payload)?.['d'] || '[]');
+        const records = googlePlaceRecords(JSON.parse(payload));
 
         const results =
-          json?.[0]?.[1]?.slice(1, take + 1)?.flatMap((el: any) => {
-            const data = el?.[14];
+          records.slice(0, take).flatMap((data: any) => {
             const title = data?.[11];
             if (typeof title !== 'string' || !title.trim()) return [];
 
