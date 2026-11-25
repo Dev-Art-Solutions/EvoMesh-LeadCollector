@@ -72,3 +72,19 @@ describe('bestEmail', () => {
     expect(bestEmail([])).toBeUndefined();
   });
 });
+
+describe('deobfuscate on hostile page text', () => {
+  it('still decodes the common forms after whitespace is collapsed', () => {
+    expect(deobfuscate('sales (at) example (dot) com')).toBe('sales@example.com');
+    expect(deobfuscate('sales\n at \texample  dot  com')).toBe('sales@example.com');
+    expect(deobfuscate('mail [at] example [dot] org')).toBe('mail@example.org');
+  });
+
+  it('is linear in a long whitespace run', () => {
+    // The old /\s+dot\s+/ took ~30 s on a real page shaped like this.
+    const text = `before${' \n\t'.repeat(150_000)}after info at example dot com`;
+    const started = Date.now();
+    expect(deobfuscate(text)).toContain('info@example.com');
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+});

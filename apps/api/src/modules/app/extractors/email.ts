@@ -21,17 +21,28 @@ const PRIORITY_LOCALPARTS = [
   'mail',
 ];
 
+// A bound on the text one page can make this read (bodies are capped at
+// 512 KB before parsing, so it is rarely reached).
+const MAX_TEXT_CHARS = 600_000;
+
 /**
  * Decode common textual obfuscations: "name (at) domain (dot) com".
  * Conservative — only collapses the well-known tokens.
  */
 export function deobfuscate(text: string): string {
+  // Collapse whitespace first, in one linear pass. `\s+dot\s+` straight on
+  // page text is quadratic in a long whitespace run: every start inside the
+  // run re-scans it to the end. One real page cost ~30 s of CPU per visit and
+  // froze the whole backend, enrichment and the worker's check-ins with it.
   return text
-    .replace(/\s*[([{]\s*at\s*[)\]}]\s*/gi, '@')
-    .replace(/\s+at\s+/gi, '@')
-    .replace(/\s*[([{]\s*dot\s*[)\]}]\s*/gi, '.')
-    .replace(/\s+dot\s+/gi, '.');
+    .slice(0, MAX_TEXT_CHARS)
+    .replace(/\s+/g, ' ')
+    .replace(/ ?[([{] ?at ?[)\]}] ?/gi, '@')
+    .replace(/ at /gi, '@')
+    .replace(/ ?[([{] ?dot ?[)\]}] ?/gi, '.')
+    .replace(/ dot /gi, '.');
 }
+
 
 export function normalizeEmail(raw: string): string {
   return raw.trim().toLowerCase().replace(/\s+/g, '').replace(/^mailto:/, '');
