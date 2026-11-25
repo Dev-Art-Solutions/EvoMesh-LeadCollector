@@ -149,3 +149,44 @@ test('a plain create stores the payload fields at the top of the record', () => 
   expect((record.dc_event as Record<string, unknown>).source_key).toBe('business:google_maps:x');
   expect('payload' in (record.dc_event as Record<string, unknown>)).toBe(false);
 });
+
+test('plain batch sends many records per request and settles each by its own result', async () => {
+  finishedJob();
+  enqueueFinishedJobs(db);
+  const batch = { ...settings(), plainBatch: true, batchSize: 500 };
+  const calls: { url: string; items: unknown[] }[] = [];
+  const fetchImpl = async (url: string, init: RequestInit) => {
+    const items = JSON.parse(String(init.body)).items as unknown[];
+    calls.push({ url, items });
+    // The collector refuses the first item of the business batch only.
+    const results = items.map((_, index) =>
+      url.includes('/biz/') && index === 0
+        ? { index, status: 'error', error: 'schema' }
+        : { index, status: 'created', id: `r${index}` },
+    );
+    return new Response(JSON.stringify({ items: results }), { status: url.includes('/biz/') ? 207 : 201 });
+  };
+  const report = await syncOnce(db, batch, fetchImpl);
+  // One request per collection, not one per record.
+  expect(calls.every((call) => call.url.endsWith('/records/batch'))).toBe(true);
+  expect(new Set(calls.map((call) => call.url)).size).toBe(calls.length);
+  expect(report.dead).toBe(1);
+  expect(report.acknowledged).toBe(calls.reduce((n, call) => n + call.items.length, 0) - 1);
+  expect((calls.find((call) => call.url.includes('/biz/'))!.items[0] as Record<string, unknown>).dc_event).toBeDefined();
+});
+
+test('plain batch stops the round on 429 and keeps every event', async () => {
+  finishedJob();
+  const queued = enqueueFinishedJobs(db);
+  let requests = 0;
+  const report = await syncOnce(db, { ...settings(), plainBatch: true }, async () => {
+    requests++;
+    return new Response('', { status: 429, headers: { 'Retry-After': '60' } });
+  });
+  expect(requests).toBe(1);
+  expect(report.acknowledged).toBe(0);
+  // The refused chunk waits for its retry; collections not tried stay pending.
+  const counts = outboxCounts(db);
+  expect(counts.retry).toBeGreaterThan(0);
+  expect((counts.retry ?? 0) + (counts.pending ?? 0)).toBe(queued);
+});

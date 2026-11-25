@@ -22,6 +22,7 @@ export interface DcSettings {
   apiKey: string;
   collections: Record<string, string>;
   upsertBatch: boolean;
+  plainBatch: boolean;
   batchSize: number;
   maxAttempts: number;
   minBackoffMs: number;
@@ -54,7 +55,11 @@ export function dcSettings(
     apiKey,
     collections,
     upsertBatch: env.LEADCOLLECTOR_DC_UPSERT_BATCH === '1',
-    batchSize: 50,
+    // POST /records/batch: many records per request, which the collector's
+    // per-key write limit (30 a minute by default) counts as one write. It
+    // inserts unconditionally, so a lost response can leave a duplicate.
+    plainBatch: env.LEADCOLLECTOR_DC_PLAIN_BATCH === '1',
+    batchSize: Math.min(500, Math.max(1, Number(env.LEADCOLLECTOR_DC_BATCH_SIZE) || 50)),
     maxAttempts: 12,
     minBackoffMs: 5_000,
     maxBackoffMs: 1_800_000,
@@ -350,6 +355,71 @@ export async function syncOnce(
     update(row.event_id, 'retry', attempts, Math.round(now + delay), error);
     report.retried++;
   };
+  if (settings.plainBatch) {
+    const groups = new Map<string, Record<string, any>[]>();
+    for (const row of rows) {
+      const collection = settings.collections[row.entity_type];
+      if (!collection) {
+        report.unroutable++;
+        db.prepare(
+          'UPDATE dc_outbox SET last_error=?, next_attempt_at=? WHERE event_id=?',
+        ).run(`no collection configured for ${row.entity_type}`, now + 60_000, row.event_id);
+        continue;
+      }
+      groups.set(collection, [...(groups.get(collection) ?? []), row]);
+    }
+    for (const [collection, all] of groups) {
+      for (let i = 0; i < all.length; i += settings.batchSize) {
+        const chunk = all.slice(i, i + settings.batchSize);
+        let response: Response;
+        try {
+          response = await fetchImpl(`${settings.url}/collections/${collection}/records/batch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-Key': settings.apiKey },
+            body: JSON.stringify({ items: chunk.map((row) => flatRecord(JSON.parse(row.payload))) }),
+            redirect: 'manual',
+            signal: AbortSignal.timeout(60_000),
+          });
+        } catch (error) {
+          for (const row of chunk) retry(row, `network: ${(error as Error).message}`);
+          continue;
+        }
+        if (response.status === 201 || response.status === 207 || response.status === 200) {
+          const body = (await response.json().catch(() => ({}))) as {
+            items?: { index: number; status: string; error?: string }[];
+          };
+          const byIndex = new Map((body.items ?? []).map((item) => [item.index, item]));
+          chunk.forEach((row, index) => {
+            const item = byIndex.get(index);
+            if (item?.status === 'created') {
+              update(row.event_id, 'acknowledged', Number(row.attempts), 0, '');
+              report.acknowledged++;
+            } else if (item) {
+              update(row.event_id, 'dead_letter', Number(row.attempts), 0, `rejected: ${item.error ?? item.status}`);
+              report.dead++;
+            } else {
+              retry(row, 'no per-item result in batch response');
+            }
+          });
+        } else if (response.status === 401 || response.status === 403) {
+          report.error = `credential rejected (${response.status}); events kept`;
+          for (const row of chunk) retry(row, report.error);
+          return report;
+        } else if (response.status === 429 || response.status >= 500) {
+          // Out of write budget (or down): every further request this round
+          // would be refused the same way.
+          for (const row of all.slice(i)) retry(row, `HTTP ${response.status}`, response.headers.get('Retry-After'));
+          return report;
+        } else {
+          const text = (await response.text()).slice(0, 300);
+          for (const row of chunk)
+            update(row.event_id, 'dead_letter', Number(row.attempts), 0, `HTTP ${response.status}: ${text}`);
+          report.dead += chunk.length;
+        }
+      }
+    }
+    return report;
+  }
   for (const row of rows) {
     const collection = settings.collections[row.entity_type];
     if (!collection) {
