@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { JobsService } from '../jobs/jobs.service';
 import {
   dcSettings,
+  businessRecord,
   enqueueFinishedJobs,
   envelope,
   flatRecord,
@@ -189,4 +190,38 @@ test('plain batch stops the round on 429 and keeps every event', async () => {
   const counts = outboxCounts(db);
   expect(counts.retry).toBeGreaterThan(0);
   expect((counts.retry ?? 0) + (counts.pending ?? 0)).toBe(queued);
+});
+
+test('an entity is queued once however many jobs see it', () => {
+  finishedJob();
+  const first = enqueueFinishedJobs(db);
+  finishedJob(); // the same two places, found by a second search
+  const second = enqueueFinishedJobs(db);
+  expect(first).toBeGreaterThan(1);
+  // Only the second job's run record is new.
+  expect(second).toBe(1);
+  const keys = db
+    .prepare("SELECT source_key, COUNT(*) n FROM dc_outbox WHERE entity_type <> 'agent_run' GROUP BY source_key HAVING n > 1")
+    .all();
+  expect(keys).toEqual([]);
+});
+
+test('the business record carries the lead contacts and whether it has a website', () => {
+  const contacts = [
+    { type: 'phone', normalized: '+15550001', source_url: 'https://site.example/contact' },
+    { type: 'phone', normalized: '+15550002', source_url: 'https://www.google.com/maps?cid=1' },
+    { type: 'email', normalized: 'info@site.example', source_url: 'https://site.example/' },
+    { type: 'email', normalized: 'info@site.example', source_url: 'https://site.example/contact' },
+    { type: 'social', normalized: 'https://facebook.com/site', source_url: 'https://site.example/' },
+  ];
+  const withSite = businessRecord({ name: 'A', website_url: 'https://site.example/' }, contacts);
+  expect(withSite).toMatchObject({
+    has_website: true,
+    phone: '+15550002',
+    email: 'info@site.example',
+    emails: ['info@site.example'],
+    phones: ['+15550001', '+15550002'],
+    socials: ['https://facebook.com/site'],
+  });
+  expect(businessRecord({ name: 'B' }, [])).toMatchObject({ has_website: false, phone: null, email: null });
 });

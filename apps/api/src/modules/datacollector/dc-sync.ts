@@ -127,12 +127,19 @@ export function flatRecord(event: Record<string, unknown>): Record<string, unkno
   return { ...((payload as Record<string, unknown>) ?? {}), dc_event: rest };
 }
 
+/** Queue an event unless its entity was already queued. Without upsert on
+ * the receiver every repeat is another record: a phone seen on the listing
+ * and again on the website, or a business found by two searches, filled the
+ * collector with copies (40% of contacts). First observation wins; runs are
+ * one per job and always go. */
 function insert(db: DatabaseSync, event: Envelope, now: number): boolean {
+  const once = event.entity_type !== 'agent_run';
   const result = db
     .prepare(
       `INSERT OR IGNORE INTO dc_outbox(event_id, source_key, content_hash, entity_type, payload,
          state, attempts, next_attempt_at, last_error, created_at)
-       VALUES (?, ?, ?, ?, ?, 'pending', 0, 0, '', ?)`,
+       SELECT ?, ?, ?, ?, ?, 'pending', 0, 0, '', ?
+       WHERE ? = 0 OR NOT EXISTS (SELECT 1 FROM dc_outbox WHERE source_key = ?)`,
     )
     .run(
       event.event_id,
@@ -141,8 +148,36 @@ function insert(db: DatabaseSync, event: Envelope, now: number): boolean {
       event.entity_type,
       JSON.stringify(event),
       now,
+      once ? 1 : 0,
+      event.source_key,
     );
   return Number(result.changes) === 1;
+}
+
+/** The lead as one record: its listing profile plus what is known about how
+ * to reach it, so a row in the collector answers "who, and how" alone. */
+export function businessRecord(
+  profile: Record<string, unknown>,
+  contacts: { type: string; normalized: string; source_url?: string | null }[],
+): Record<string, unknown> {
+  const of = (type: string) => [
+    ...new Set(contacts.filter((c) => c.type === type).map((c) => c.normalized)),
+  ];
+  const phones = of('phone');
+  const emails = of('email');
+  // The listing's own phone first: it is what the business published there.
+  const listed = contacts.find(
+    (c) => c.type === 'phone' && /google\./.test(c.source_url ?? ''),
+  )?.normalized;
+  return {
+    ...profile,
+    has_website: Boolean(profile.website_url),
+    phone: listed ?? phones[0] ?? null,
+    email: emails[0] ?? null,
+    phones,
+    emails,
+    socials: of('social'),
+  };
 }
 
 function json(value: unknown): Record<string, unknown> {
@@ -182,10 +217,13 @@ export function enqueueFinishedJobs(
         const businessKey = profile.place_id
           ? `business:${profile.platform}:${profile.place_id}`
           : `business:leadcollector:${lead.id}`;
+        const contacts = db
+          .prepare('SELECT * FROM lead_contacts WHERE lead_id = ? ORDER BY observed_at')
+          .all(lead.id) as Record<string, any>[];
         if (
           insert(
             db,
-            envelope('business', businessKey, profile, {
+            envelope('business', businessKey, businessRecord(profile, contacts as any), {
               observedAt: iso(profile.updated_at as number),
               sourceUrl: (profile.listing_url as string) || '',
               jobId: job.id,
@@ -194,9 +232,6 @@ export function enqueueFinishedJobs(
           )
         )
           queued++;
-        const contacts = db
-          .prepare('SELECT * FROM lead_contacts WHERE lead_id = ?')
-          .all(lead.id) as Record<string, any>[];
         for (const contact of contacts) {
           const payload = {
             business_key: businessKey,
@@ -241,7 +276,7 @@ export function enqueueFinishedJobs(
               db,
               envelope(
                 'source_observation',
-                `source_observation:leadcollector:${source.id}`,
+                `source_observation:${businessKey}:${source.platform}:${source.url ?? ""}`,
                 payload,
                 {
                   observedAt: iso(source.observed_at),
