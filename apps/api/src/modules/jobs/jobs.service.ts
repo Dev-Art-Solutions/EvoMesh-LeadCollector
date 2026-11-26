@@ -511,6 +511,16 @@ export class JobsService implements OnModuleDestroy {
     });
   }
 
+  /** Run a finished, failed or cancelled job's search again as a new job
+   * (same parameters, new id); the old one and its results stay. */
+  retry(id: string): Job {
+    const row = this.row(id);
+    if (!TERMINAL.includes(row.status))
+      throw new ConflictException('Job is still running; cancel it first');
+    const params = JSON.parse(String(row.params)) as CreateJobInput & { url?: string };
+    return this.create({ ...params, requestId: `retry-${id.slice(0, 8)}-${Date.now().toString(36)}` });
+  }
+
   cancel(id: string): Job {
     const now = Date.now();
     this.maintain(now);

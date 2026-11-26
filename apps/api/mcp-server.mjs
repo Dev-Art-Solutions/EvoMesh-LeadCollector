@@ -158,9 +158,64 @@ register('extract_website_contacts', 'Extract observed public business contacts 
 
 register('list_jobs', 'List up to 50 recent jobs and their status.', {},
   async (_, signal) => (await api('jobs', { signal })).map(job => ({
-    id: job.id, platform: job.platform, query: job.query, status: job.status, phase: job.phase,
+    id: job.id, platform: job.platform, query: job.query, owner: job.owner, status: job.status, phase: job.phase,
     results: job.results, errorCode: job.errorCode,
   })));
+
+// -- campaigns: many searches as one task, run beside the others -------------
+
+const campaignId = { campaign_id: z.string().uuid() };
+
+register('create_campaign',
+  'Start a collection task of many searches, "<category> in <location>" for every category and location, '
+  + 'running beside the tasks already going (it does not stop them). Use it for a whole town, region or country: '
+  + 'e.g. all local businesses in Veliko Tarnovo = locations ["Veliko Tarnovo, Bulgaria"], preset "all_local", '
+  + 'country "BG". preset "smb" = 25 service niches, "all_local" = ~100 kinds of local business; or pass categories '
+  + 'yourself (plural nouns, e.g. ["restaurants","cafes"]). country (ISO2) sets the Google Maps region and the '
+  + 'language results come back in. priority: higher goes first; the nationwide USA campaigns run at 1-3, '
+  + 'so a requested town at the default 10 finishes first. Website contacts are enriched for every lead.',
+  {
+    name: z.string().min(1).max(120),
+    locations: z.array(z.string().min(1).max(160)).min(1).max(10000),
+    preset: z.enum(['smb', 'all_local']).optional(),
+    categories: z.array(z.string().min(1).max(80)).max(300).optional(),
+    country: z.string().regex(/^[a-zA-Z]{2}$/).optional(),
+    priority: z.number().int().min(-100).max(100).optional(),
+  },
+  (args, signal) => api('campaigns', { signal, timeout: 30000, body: {
+    name: args.name, locations: args.locations, preset: args.preset, categories: args.categories,
+    country: args.country, priority: args.priority ?? 10, owner: 'lead-researcher',
+  } }));
+
+register('list_campaigns',
+  'All collection tasks with status (running/paused/stopped/done), priority, searches done/total, progress % '
+  + 'and leads, plus the collector-wide hold (set when Google asked for a human).', {},
+  (_, signal) => api('campaigns', { signal }));
+
+register('get_campaign',
+  'One task in detail: counts, the searches in flight now (phase, results), recent failures and what comes next.',
+  campaignId, ({ campaign_id }, signal) => api(`campaigns/${campaign_id}`, { signal }));
+
+register('pause_campaign', 'Pause a task: searches already running finish, no new ones start.', campaignId,
+  ({ campaign_id }, signal) => api(`campaigns/${campaign_id}/pause`, { method: 'POST', signal }));
+
+register('resume_campaign', 'Resume a paused or stopped task; searches a stop cancelled run again.', campaignId,
+  ({ campaign_id }, signal) => api(`campaigns/${campaign_id}/resume`, { method: 'POST', signal }));
+
+register('stop_campaign', 'Stop a task: cancels its running searches; collected leads stay. It can be resumed later.',
+  campaignId, ({ campaign_id }, signal) => api(`campaigns/${campaign_id}/stop`, { method: 'POST', signal }));
+
+register('set_campaign_priority', 'Change a task\'s priority (higher runs first, equals take turns).',
+  { ...campaignId, priority: z.number().int().min(-100).max(100) },
+  ({ campaign_id, priority }, signal) => api(`campaigns/${campaign_id}/priority`, { body: { priority }, signal }));
+
+register('resume_collector',
+  'Clear the collector-wide hold after the human has handled Google\'s consent page or CAPTCHA in the EvoMesh '
+  + 'Chrome. Never call this unless the human said they did it.', {},
+  (_, signal) => api('collector/resume', { method: 'POST', signal }));
+
+register('retry_job', 'Run a finished, failed or cancelled single search again as a new job.', jobId,
+  ({ job_id }, signal) => api(`jobs/${job_id}/retry`, { method: 'POST', signal }));
 
 register('collect_maps', 'Legacy synchronous collection. Prefer start_collection, status, paginated results, and exports.',
   { ...collection, timeout_seconds: z.number().int().min(10).max(900).optional() },

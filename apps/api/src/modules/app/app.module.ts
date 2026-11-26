@@ -7,9 +7,10 @@ import { EnrichmentProcessor } from './enrichment.processor';
 import { LoggerModule } from '@/modules/logger';
 import { JobsModule } from '@/modules/jobs';
 import { DcSyncService } from '@/modules/datacollector';
+import { CampaignsModule } from '@/modules/campaigns';
 
 @Module({
-  imports: [LoggerModule, JobsModule],
+  imports: [LoggerModule, JobsModule, CampaignsModule],
   controllers: [AppController],
   providers: [AppService, EnrichmentProcessor, DcSyncService],
 })

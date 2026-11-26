@@ -118,6 +118,16 @@ export class JobsController {
     return this.jobs.cancel(id);
   }
 
+  @Post(':id/retry')
+  @HttpCode(200)
+  retry(
+    @Headers('authorization') auth: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    requireRole(auth, 'agent');
+    return this.jobs.retry(id);
+  }
+
   @Post(':id/export')
   export(
     @Headers('authorization') auth: string,

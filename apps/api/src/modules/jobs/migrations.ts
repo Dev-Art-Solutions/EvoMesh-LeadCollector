@@ -129,6 +129,41 @@ const migrations = [
     exported_at INTEGER NOT NULL
   ) STRICT;
   `,
+  // 3: campaigns (modules/campaigns) -- many searches run as one task the
+  // scheduler feeds to the worker, beside any other task. Additive.
+  `
+  CREATE TABLE campaigns (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('running','paused','stopped','done')),
+    priority INTEGER NOT NULL DEFAULT 0,
+    params TEXT NOT NULL CHECK(json_valid(params)),
+    owner TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    last_submit_at INTEGER NOT NULL DEFAULT 0
+  ) STRICT;
+  CREATE TABLE campaign_items (
+    campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    query TEXT NOT NULL,
+    location TEXT NOT NULL,
+    category TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','active','done','failed','cancelled')),
+    job_id TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    results INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(campaign_id, position)
+  ) STRICT;
+  CREATE INDEX campaign_items_state ON campaign_items(campaign_id, status, position);
+  CREATE INDEX campaign_items_job ON campaign_items(job_id);
+  CREATE TABLE collector_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  ) STRICT;
+  `,
 ];
 
 export function transaction<T>(db: DatabaseSync, run: () => T): T {
