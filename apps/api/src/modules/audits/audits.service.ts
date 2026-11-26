@@ -5,7 +5,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 
 import { stateDirectory } from '../jobs/collector.config';
 import { JobsService } from '../jobs/jobs.service';
-import { auditView, BatchFilter, claimNext, findLeads, listAudits, queueAudit, requeueStale, runAudit } from './audits';
+import { auditView, BatchFilter, claimNext, findLeads, listAudits, queueAudit, queueAuditForWebsite, requeueStale, runAudit } from './audits';
 
 /** Runs queued audits one at a time. JobsService is injected so its
  * constructor has migrated the database before this opens it. */
@@ -55,6 +55,10 @@ export class AuditsService implements OnModuleInit, OnModuleDestroy {
 
   create(leadId: string, requestedBy?: string) {
     return queueAudit(this.db, leadId, requestedBy ?? null);
+  }
+
+  createForWebsite(input: { url: string; name?: string; country?: string }, requestedBy?: string) {
+    return queueAuditForWebsite(this.db, input, requestedBy ?? null);
   }
 
   batch(filter: BatchFilter, requestedBy?: string) {

@@ -80,6 +80,9 @@ export interface AuditEvidence {
     observed_at: string | null;
   };
   listing: {
+    /** False when the business was never collected from a map listing
+     * (an audit ordered by website address): listing checks are unknown. */
+    checked: boolean;
     rating: number | null;
     review_count: number | null;
     opening_hours: string | null;
@@ -451,6 +454,7 @@ export async function collectEvidence(
       observed_at: iso(profile.updated_at),
     },
     listing: {
+      checked: Boolean(listing),
       rating: typeof profile.rating === 'number' ? profile.rating : null,
       review_count: typeof profile.review_count === 'number' ? profile.review_count : null,
       opening_hours: profile.opening_hours ?? null,

@@ -4,7 +4,7 @@
  * directory, and offered to the Data Collector as a marketing_audit record.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 
@@ -36,6 +36,50 @@ export function queueAudit(db: DatabaseSync, leadId: string, requestedBy: string
     "INSERT INTO audits(id, lead_id, status, requested_by, created_at) VALUES (?, ?, 'queued', ?, ?)",
   ).run(id, leadId, requestedBy, now);
   return auditView(db, id);
+}
+
+/** An audit for a business known only by its website (not collected from a
+ * map): reuse a lead with that domain, or record a minimal one. Its listing
+ * checks then read "not checked". */
+export function queueAuditForWebsite(
+  db: DatabaseSync,
+  input: { url: string; name?: string; country?: string },
+  requestedBy: string | null,
+  now = Date.now(),
+) {
+  let url: URL;
+  try {
+    url = new URL(/^https?:\/\//i.test(input.url) ? input.url : `https://${input.url}`);
+  } catch {
+    throw new AuditError('invalid', 'website_url is not a valid address');
+  }
+  if (!/^https?:$/.test(url.protocol)) throw new AuditError('invalid', 'website_url must be http(s)');
+  const domain = url.hostname.replace(/^www\./, '').toLowerCase();
+  const existing = db
+    .prepare(
+      `SELECT id FROM leads WHERE lower(json_extract(profile,'$.domain')) = ?
+         ORDER BY CAST(json_extract(profile,'$.review_count') AS INTEGER) DESC LIMIT 1`,
+    )
+    .get(domain) as Row | undefined;
+  let leadId = existing ? String(existing.id) : '';
+  if (!leadId) {
+    leadId = randomUUID();
+    const name = (input.name ?? '').trim() || domain;
+    const profile = {
+      schema_version: 1,
+      id: leadId,
+      name,
+      website_url: url.href,
+      domain,
+      ...(input.country ? { country_code: input.country.toUpperCase() } : {}),
+      created_at: now,
+      updated_at: now,
+    };
+    db.prepare(
+      'INSERT INTO leads(id, fallback_key, name, search_text, profile, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(leadId, `website:${domain}`, name, `${name} ${domain}`.toLowerCase(), JSON.stringify(profile), now, now);
+  }
+  return queueAudit(db, leadId, requestedBy, now);
 }
 
 export interface BatchFilter {
@@ -145,6 +189,21 @@ const slug = (s: string) =>
     .replace(/\s+/g, '-')
     .slice(0, 60) || 'business';
 
+/** The PDF as record fields: base64 content plus what a consumer needs to
+ * save and check it. */
+export function pdfAttachment(pdfPath: string, business: string) {
+  const bytes = readFileSync(pdfPath);
+  const base = `marketing-audit-${slug(business)}.pdf`;
+  return {
+    pdf_filename: base,
+    pdf_mime: 'application/pdf',
+    pdf_encoding: 'base64',
+    pdf_bytes: bytes.length,
+    pdf_sha256: createHash('sha256').update(bytes).digest('hex'),
+    pdf_base64: bytes.toString('base64'),
+  };
+}
+
 export async function runAudit(
   db: DatabaseSync,
   audit: { id: string; leadId: string },
@@ -191,7 +250,10 @@ export async function runAudit(
         top_recommendations: summary.top_recommendations,
         not_checked: summary.not_checked,
         language: evidence.language,
-        pdf_path: pdfPath,
+        // The report itself travels with the record, so a consumer of the
+        // collector gets the PDF and not a path on the auditor's machine.
+        // JSON carries no raw bytes: base64 of the PDF (application/pdf).
+        ...pdfAttachment(pdfPath, evidence.business.name),
         audited_at: evidence.generated_at,
       };
       const event = envelope('marketing_audit', `marketing_audit:${audit.id}`, payload, {

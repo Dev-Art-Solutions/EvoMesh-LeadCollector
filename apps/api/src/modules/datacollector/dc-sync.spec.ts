@@ -7,6 +7,7 @@ import { JobsService } from '../jobs/jobs.service';
 import {
   dcSettings,
   businessRecord,
+  chunkBySize,
   enqueueFinishedJobs,
   envelope,
   flatRecord,
@@ -224,4 +225,12 @@ test('the business record carries the lead contacts and whether it has a website
     socials: ['https://facebook.com/site'],
   });
   expect(businessRecord({ name: 'B' }, [])).toMatchObject({ has_website: false, phone: null, email: null });
+});
+
+test('a batch is cut by size as well as count, so a record carrying a PDF fits', () => {
+  const row = (kb: number) => ({ payload: 'x'.repeat(kb * 1024) });
+  const rows = [row(1500), row(1500), row(1500), row(10), row(5000)];
+  const chunks = chunkBySize(rows, 500, 4 * 1024 * 1024);
+  expect(chunks.map((c) => c.length)).toEqual([2, 2, 1]);
+  expect(chunkBySize([row(1), row(1), row(1)], 2, 1024 * 1024).map((c) => c.length)).toEqual([2, 1]);
 });

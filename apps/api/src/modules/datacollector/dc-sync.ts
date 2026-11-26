@@ -334,6 +334,29 @@ export function enqueueFinishedJobs(
   return queued;
 }
 
+/** The collector refuses a batch body over 5 MB (max_batch_bytes); a record
+ * can be large -- an audit carries its PDF -- so a batch is cut by size as
+ * well as by count. One oversized row still goes alone. */
+export const MAX_BATCH_BYTES = 4 * 1024 * 1024;
+
+export function chunkBySize<T extends Record<string, any>>(rows: T[], maxCount: number, maxBytes: number): T[][] {
+  const out: T[][] = [];
+  let current: T[] = [];
+  let bytes = 0;
+  for (const row of rows) {
+    const size = Buffer.byteLength(String(row.payload ?? ""));
+    if (current.length && (current.length >= maxCount || bytes + size > maxBytes)) {
+      out.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(row);
+    bytes += size;
+  }
+  if (current.length) out.push(current);
+  return out;
+}
+
 export interface SyncReport {
   acknowledged: number;
   retried: number;
@@ -415,8 +438,9 @@ export async function syncOnce(
       groups.set(collection, [...(groups.get(collection) ?? []), row]);
     }
     for (const [collection, all] of groups) {
-      for (let i = 0; i < all.length; i += settings.batchSize) {
-        const chunk = all.slice(i, i + settings.batchSize);
+      const chunks = chunkBySize(all, settings.batchSize, MAX_BATCH_BYTES);
+      for (let c = 0; c < chunks.length; c++) {
+        const chunk = chunks[c];
         let response: Response;
         try {
           response = await fetchImpl(`${settings.url}/collections/${collection}/records/batch`, {
@@ -454,7 +478,7 @@ export async function syncOnce(
         } else if (response.status === 429 || response.status >= 500) {
           // Out of write budget (or down): every further request this round
           // would be refused the same way.
-          for (const row of all.slice(i)) retry(row, `HTTP ${response.status}`, response.headers.get('Retry-After'));
+          for (const row of chunks.slice(c).flat()) retry(row, `HTTP ${response.status}`, response.headers.get('Retry-After'));
           return report;
         } else {
           const text = (await response.text()).slice(0, 300);

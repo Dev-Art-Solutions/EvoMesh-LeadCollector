@@ -233,9 +233,19 @@ register('create_audit',
   'Queue a Marketing Audit Report (branded PDF) for one lead: business overview, overall score, website, technology, '
   + 'SEO, Google Business Profile, NAP, reputation, competitors, recommendations and a 30/60/90-day plan. Language follows '
   + "the business's country (Bulgarian for BG, English otherwise). Takes 1-3 minutes; follow it with get_audit. "
-  + 'Find lead_id with search_leads or preview_audit_leads.',
-  { lead_id: z.string().uuid() },
-  ({ lead_id }, signal) => api('audits', { body: { leadId: lead_id, requestedBy: 'marketing-auditor' }, signal }));
+  + 'Give lead_id (find it with search_leads or preview_audit_leads) or, for any other business, website_url.',
+  {
+    lead_id: z.string().uuid().optional(),
+    website_url: z.string().min(3).max(2048).optional()
+      .describe('Instead of lead_id: audit any business by its website, e.g. "https://devart.solutions/". Use it when the business is not among the collected leads.'),
+    name: z.string().max(160).optional().describe('Business name, with website_url'),
+    country: z.string().regex(/^[a-zA-Z]{2}$/).optional().describe('ISO country of the business, with website_url; BG gives a Bulgarian report'),
+  },
+  ({ lead_id, website_url, name, country }, signal) => {
+    if (!lead_id && !website_url) throw new ToolError('invalid_request', 'give lead_id or website_url');
+    return api('audits', { body: lead_id ? { leadId: lead_id, requestedBy: 'marketing-auditor' }
+      : { websiteUrl: website_url, name, country, requestedBy: 'marketing-auditor' }, signal });
+  });
 
 register('preview_audit_leads', 'List the leads (id, name, city, website, reviews) a filter matches, most reviewed first, without queueing audits.',
   auditFilter, (a, signal) => api('audits/preview', { body: filterBody(a), signal }));

@@ -18,7 +18,7 @@ function evidence(over: Partial<AuditEvidence> = {}): AuditEvidence {
       phones: ['+15125550100'], emails: [], socials: [], categories: ['Dentist', 'Cosmetic dentist'], main_category: 'Dentist',
       listing_url: 'https://www.google.com/maps?cid=1', observed_at: '2026-11-25T00:00:00.000Z',
     },
-    listing: { rating: 4.8, review_count: 120, opening_hours: 'Mon 9-5', claimed: true, has_phone: true, has_website: true, categories: ['Dentist', 'Cosmetic dentist'], observed_at: '2026-11-25T00:00:00.000Z', source: 'https://www.google.com/maps?cid=1' },
+    listing: { checked: true, rating: 4.8, review_count: 120, opening_hours: 'Mon 9-5', claimed: true, has_phone: true, has_website: true, categories: ['Dentist', 'Cosmetic dentist'], observed_at: '2026-11-25T00:00:00.000Z', source: 'https://www.google.com/maps?cid=1' },
     website: {
       state: 'observed', source: url.href, checked_at: '2026-11-26T00:00:00.000Z',
       value: {
@@ -63,4 +63,13 @@ test('the report renders in Bulgarian for a Bulgarian business, with every secti
     expect(html).toContain(heading);
   expect(html).toContain('Не е проверено');
   expect(html).not.toContain('<script');
+});
+
+test('an audit by website only marks listing and reputation checks as not checked, not failed', () => {
+  const e = evidence({ listing: { ...evidence().listing, checked: false, rating: null, review_count: null, has_phone: false } });
+  const s = score(e);
+  for (const id of ['gbp_claimed', 'gbp_phone', 'gbp_hours', 'rating', 'review_volume'])
+    expect(s.criteria.find((c) => c.id === id)!.status).toBe('unknown');
+  expect(s.categories.find((c) => c.id === 'gbp')!.score).toBeNull();
+  expect(s.categories.find((c) => c.id === 'website')!.score).not.toBeNull();
 });

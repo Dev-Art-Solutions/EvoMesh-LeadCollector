@@ -1,8 +1,24 @@
-import { IsBoolean, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min } from 'class-validator';
 
 export class CreateAuditDto {
+  @IsOptional()
   @IsUUID()
-  leadId: string;
+  leadId?: string;
+
+  /** Instead of leadId: audit a business known only by its website. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  websiteUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  name?: string;
+
+  @IsOptional()
+  @Matches(/^[a-zA-Z]{2}$/)
+  country?: string;
 
   @IsOptional()
   @IsString()

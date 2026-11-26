@@ -22,7 +22,12 @@ export class AuditsController {
   @Post()
   create(@Headers('authorization') auth: string, @Body() body: CreateAuditDto) {
     requireRole(auth, 'agent');
-    return mapped(() => this.audits.create(body.leadId, body.requestedBy));
+    if (body.leadId) return mapped(() => this.audits.create(body.leadId!, body.requestedBy));
+    if (body.websiteUrl)
+      return mapped(() =>
+        this.audits.createForWebsite({ url: body.websiteUrl!, name: body.name, country: body.country }, body.requestedBy),
+      );
+    throw new BadRequestException('give leadId or websiteUrl');
   }
 
   /** Queue an audit for every lead matching the filter (most reviewed first). */

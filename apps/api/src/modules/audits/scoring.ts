@@ -430,8 +430,16 @@ const RECS: Record<string, { en: [string, string]; bg: [string, string]; impact:
 
 export function score(e: AuditEvidence): AuditScore {
   const lang: Lang = e.language;
+  const noListing = pick(
+    lang,
+    'Not checked: the business was not collected from Google Maps for this report',
+    'Не е проверено: бизнесът не е събран от Google Maps за този отчет',
+  );
   const criteria: Criterion[] = DEFS.map((d) => {
-    const { status, detail } = d.test(e, lang);
+    const { status, detail } =
+      !e.listing.checked && (d.category === 'gbp' || d.category === 'reputation')
+        ? { status: 'unknown' as Status, detail: noListing }
+        : d.test(e, lang);
     return { id: d.id, category: d.category, label: d.label[lang], status, detail, weight: d.weight };
   });
   const categories = (Object.keys(CATEGORY_WEIGHTS) as CategoryId[]).map((id) => {
