@@ -33,7 +33,7 @@ export class EnrichmentProcessor implements OnModuleInit, OnModuleDestroy {
   private tick() {
     try {
       for (const [jobId, abort] of this.active) {
-        if (this.jobs.status(jobId).phase !== 'enriching') abort.abort();
+        if (this.jobs.phase(jobId) !== 'enriching') abort.abort();
       }
       while (!this.stopping && this.active.size < this.parallel) {
         const task = this.jobs.nextEnrichment();

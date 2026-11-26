@@ -550,6 +550,15 @@ export class JobsService implements OnModuleDestroy {
     });
   }
 
+  /** Just the phase, for a loop that only needs to know whether a job is
+   * still enriching: status() recounts the job's enrichment and leads, and
+   * the enrichment processor calling it per job per site took most of the
+   * backend's one thread (found 2026-11-26, 28 s of a 45 s profile). */
+  phase(id: string): string | null {
+    const row = this.db.prepare('SELECT phase FROM jobs WHERE id=?').get(id) as { phase: string } | undefined;
+    return row?.phase ?? null;
+  }
+
   status(id: string) {
     this.maintain();
     const job = this.view(this.row(id));
