@@ -14,6 +14,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 
 import { transaction } from '../jobs/migrations';
+import { scanFields, type SiteScan } from '../app/site-scan';
 
 export const CONTRACT_VERSION = 1;
 
@@ -159,6 +160,7 @@ function insert(db: DatabaseSync, event: Envelope, now: number): boolean {
 export function businessRecord(
   profile: Record<string, unknown>,
   contacts: { type: string; normalized: string; source_url?: string | null }[],
+  scan?: SiteScan | null,
 ): Record<string, unknown> {
   const of = (type: string) => [
     ...new Set(contacts.filter((c) => c.type === type).map((c) => c.normalized)),
@@ -177,6 +179,7 @@ export function businessRecord(
     phones,
     emails,
     socials: of('social'),
+    ...(profile.website_url ? scanFields(scan) : {}),
   };
 }
 
@@ -220,10 +223,17 @@ export function enqueueFinishedJobs(
         const contacts = db
           .prepare('SELECT * FROM lead_contacts WHERE lead_id = ? ORDER BY observed_at')
           .all(lead.id) as Record<string, any>[];
+        const scanRow = db
+          .prepare(
+            `SELECT evidence FROM lead_sources WHERE lead_id = ?
+               AND json_extract(evidence, '$.kind') = 'website_technology' ORDER BY id DESC LIMIT 1`,
+          )
+          .get(lead.id) as { evidence: string } | undefined;
+        const scan = scanRow ? (json(scanRow.evidence).fields as SiteScan) : null;
         if (
           insert(
             db,
-            envelope('business', businessKey, businessRecord(profile, contacts as any), {
+            envelope('business', businessKey, businessRecord(profile, contacts as any, scan), {
               observedAt: iso(profile.updated_at as number),
               sourceUrl: (profile.listing_url as string) || '',
               jobId: job.id,

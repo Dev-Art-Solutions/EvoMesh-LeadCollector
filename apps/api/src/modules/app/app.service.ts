@@ -9,6 +9,7 @@ import {
 } from './extractors';
 import { observedContacts } from '../jobs/leads';
 import { setting } from '../jobs/collector.config';
+import { scanSite, type SiteScan } from './site-scan';
 import { WebsiteError, WebsiteSession, websiteTarget } from './website-fetch';
 
 export function parseContactPage(
@@ -110,6 +111,7 @@ export class AppService {
     const pages: ContactPage[] = [];
     let state: ContactResult['status'] = 'not_found';
     let error: string | undefined;
+    let scan: SiteScan | undefined;
     try {
       const target = websiteTarget(url.trim());
       session = new WebsiteSession(target, signal);
@@ -117,6 +119,11 @@ export class AppService {
       pages.push(
         parseContactPage(landing.url.href, landing.html, this.country),
       );
+      try {
+        scan = scanSite(landing.html, landing.url, landing.headers, landing.elapsedMs);
+      } catch {
+        // A page the scanner cannot read leaves the contacts it gave.
+      }
       const $ = load(landing.html);
       const links = $('a[href]')
         .map((_, element) => $(element).attr('href'))
@@ -158,6 +165,7 @@ export class AppService {
         emails.length || phones.length || socials.length ? 'found' : state,
       attempted_urls: [...(session?.attempted || [])],
       error,
+      ...(scan ? { scan } : {}),
     };
   }
 }

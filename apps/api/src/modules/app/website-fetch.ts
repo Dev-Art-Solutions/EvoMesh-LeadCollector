@@ -64,7 +64,13 @@ type Response = {
   location?: string;
   type: string;
   body: string;
+  /** A few response headers a site scan reads (server, HSTS, platform hints). */
+  headers?: Record<string, string>;
+  /** Time to the whole body, for the scan's load-time observation. */
+  elapsedMs?: number;
 };
+
+const KEPT_HEADERS = ['server', 'x-powered-by', 'strict-transport-security', 'x-generator', 'x-wix-request-id', 'x-shopify-stage'];
 
 async function osAddresses(
   hostname: string,
@@ -121,6 +127,7 @@ async function requestPinned(url: URL, signal: AbortSignal): Promise<Response> {
   signal.throwIfAborted();
   const pinned = addresses.find(({ family }) => family === 4) ?? addresses[0];
   const request = url.protocol === 'https:' ? httpsRequest : httpRequest;
+  const started = Date.now();
   return new Promise((resolve, reject) => {
     const outgoing = request(
       url,
@@ -138,6 +145,11 @@ async function requestPinned(url: URL, signal: AbortSignal): Promise<Response> {
       },
       (response) => {
         const status = response.statusCode ?? 502;
+        const headers: Record<string, string> = {};
+        for (const name of KEPT_HEADERS) {
+          const value = response.headers[name];
+          if (value) headers[name] = String(Array.isArray(value) ? value[0] : value).slice(0, 200);
+        }
         const type = response.headers['content-type'] ?? '';
         const location = response.headers.location;
         if (status >= 300) {
@@ -183,6 +195,8 @@ async function requestPinned(url: URL, signal: AbortSignal): Promise<Response> {
             location,
             type,
             body: Buffer.concat(chunks).toString('utf8'),
+            headers,
+            elapsedMs: Date.now() - started,
           }),
         );
       },
@@ -275,7 +289,12 @@ export class WebsiteSession {
         throw new WebsiteError('unavailable', 'site_unavailable');
       if (!/html/i.test(response.type))
         throw new WebsiteError('unavailable', 'unsupported_content_type');
-      return { url: current, html: response.body };
+      return {
+        url: current,
+        html: response.body,
+        headers: response.headers ?? {},
+        elapsedMs: response.elapsedMs ?? null,
+      };
     }
     throw new WebsiteError('failed', 'redirect_limit');
   }

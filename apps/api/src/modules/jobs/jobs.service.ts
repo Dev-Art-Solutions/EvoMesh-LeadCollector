@@ -713,6 +713,19 @@ export class JobsService implements OnModuleDestroy {
         snapshot.sources.push(source);
         snapshot.contacts.push(...contacts);
       }
+      if (result.scan) {
+        const source: LeadSource = {
+          kind: 'website_technology',
+          platform: 'website',
+          url: result.scan.url,
+          observed_at: now,
+          quality: 'observed',
+          availability: 'public',
+          fields: result.scan as unknown as Record<string, unknown>,
+        };
+        storeSource(this.db, task.jobId, task.leadId, source);
+        snapshot.sources.push(source);
+      }
       snapshot.enrichment = {
         status: result.status ?? 'failed',
         attempted_urls: result.attempted_urls ?? [],

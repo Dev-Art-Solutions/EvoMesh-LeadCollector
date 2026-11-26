@@ -23,6 +23,8 @@ export interface ContactResult {
   attempted_urls?: string[];
   error?: string;
   pages?: ContactPage[];
+  /** What the homepage showed about the marketing stack (site-scan.ts). */
+  scan?: import('../site-scan').SiteScan;
 }
 
 export interface ContactPage {
