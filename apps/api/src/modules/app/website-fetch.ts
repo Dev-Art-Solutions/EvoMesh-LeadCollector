@@ -59,7 +59,7 @@ const site = (url: URL) =>
     .toLowerCase()
     .replace(/^www\./, '')
     .replace(/\.$/, '');
-type Response = {
+export type Response = {
   status: number;
   location?: string;
   type: string;
@@ -88,7 +88,7 @@ async function osAddresses(
   }
 }
 
-async function requestPinned(url: URL, signal: AbortSignal): Promise<Response> {
+export async function requestPinned(url: URL, signal: AbortSignal): Promise<Response> {
   signal.throwIfAborted();
   const resolver = new Resolver({ timeout: 3000, tries: 1 });
   const abort = () => resolver.cancel();

@@ -217,6 +217,38 @@ register('resume_collector',
 register('retry_job', 'Run a finished, failed or cancelled single search again as a new job.', jobId,
   ({ job_id }, signal) => api(`jobs/${job_id}/retry`, { method: 'POST', signal }));
 
+// -- marketing audits ------------------------------------------------------------
+
+const auditFilter = {
+  city: z.string().max(120).optional().describe('Town as stored on the lead, e.g. "Austin" or "Велико Търново"'),
+  category: z.string().max(80).optional().describe('A word from the Google category, e.g. "dentist", "restaurant"'),
+  query: z.string().max(150).optional().describe('Text in the name, address or domain'),
+  with_website: z.boolean().optional(),
+  without_meta_pixel: z.boolean().optional().describe('Only leads whose homepage scan found no Meta Pixel'),
+  limit: z.number().int().min(1).max(200).optional(),
+};
+const filterBody = (a) => ({ city: a.city, category: a.category, query: a.query, withWebsite: a.with_website, withoutMetaPixel: a.without_meta_pixel, limit: a.limit });
+
+register('create_audit',
+  'Queue a Marketing Audit Report (branded PDF) for one lead: business overview, overall score, website, technology, '
+  + 'SEO, Google Business Profile, NAP, reputation, competitors, recommendations and a 30/60/90-day plan. Language follows '
+  + "the business's country (Bulgarian for BG, English otherwise). Takes 1-3 minutes; follow it with get_audit. "
+  + 'Find lead_id with search_leads or preview_audit_leads.',
+  { lead_id: z.string().uuid() },
+  ({ lead_id }, signal) => api('audits', { body: { leadId: lead_id, requestedBy: 'marketing-auditor' }, signal }));
+
+register('preview_audit_leads', 'List the leads (id, name, city, website, reviews) a filter matches, most reviewed first, without queueing audits.',
+  auditFilter, (a, signal) => api('audits/preview', { body: filterBody(a), signal }));
+
+register('audit_leads', 'Queue audits for every lead a filter matches (most reviewed first, up to limit, default 20). Preview first for large filters.',
+  auditFilter, (a, signal) => api('audits/batch', { body: { ...filterBody(a), requestedBy: 'marketing-auditor' }, signal }));
+
+register('get_audit', 'One audit: status (queued/running/done/error), overall score, category scores, top recommendations, what was not checked, and the PDF path.',
+  { audit_id: z.string().uuid() }, ({ audit_id }, signal) => api(`audits/${audit_id}`, { signal }));
+
+register('list_audits', 'The 50 most recent audits with status, score and PDF path.', {},
+  (_, signal) => api('audits', { signal }));
+
 register('collect_maps', 'Legacy synchronous collection. Prefer start_collection, status, paginated results, and exports.',
   { ...collection, timeout_seconds: z.number().int().min(10).max(900).optional() },
   async (args, signal) => {

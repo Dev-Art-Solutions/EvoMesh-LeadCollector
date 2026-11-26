@@ -164,6 +164,26 @@ const migrations = [
     updated_at INTEGER NOT NULL
   ) STRICT;
   `,
+  // 4: marketing audits (modules/audits). Additive.
+  `
+  CREATE TABLE audits (
+    id TEXT PRIMARY KEY,
+    lead_id TEXT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK(status IN ('queued','running','done','error')),
+    language TEXT,
+    overall INTEGER,
+    summary TEXT CHECK(summary IS NULL OR json_valid(summary)),
+    pdf_path TEXT,
+    json_path TEXT,
+    error TEXT,
+    requested_by TEXT,
+    created_at INTEGER NOT NULL,
+    started_at INTEGER,
+    finished_at INTEGER
+  ) STRICT;
+  CREATE INDEX audits_queue ON audits(status, created_at);
+  CREATE INDEX audits_lead ON audits(lead_id, created_at);
+  `,
 ];
 
 export function transaction<T>(db: DatabaseSync, run: () => T): T {

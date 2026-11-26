@@ -47,6 +47,7 @@ export function dcSettings(
     ['contact', 'LEADCOLLECTOR_DC_COLLECTION_CONTACT'],
     ['source_observation', 'LEADCOLLECTOR_DC_COLLECTION_OBSERVATION'],
     ['agent_run', 'LEADCOLLECTOR_DC_COLLECTION_RUN'],
+    ['marketing_audit', 'LEADCOLLECTOR_DC_COLLECTION_AUDIT'],
   ]) {
     const value = (env[name] || '').trim();
     if (value) collections[type] = value;
